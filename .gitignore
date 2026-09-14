@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/
+# Service-account JSON for firebase-admin. Never committed; mounted at runtime.
+secrets/
+*.p8
+*.pem

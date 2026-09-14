@@ -1,0 +1,34 @@
+{
+  "name": "tether-health-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend for the Tether Health platform: the patient apps, the clinician surface and the website.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc --build --verbose",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "test": "node --test --experimental-test-coverage \"packages/*/test/**/*.test.ts\" \"services/*/test/**/*.test.ts\"",
+    "db:migrate": "node --experimental-strip-types db/migrate.ts",
+    "db:seed": "node --experimental-strip-types db/seed.ts",
+    "openapi": "node --experimental-strip-types packages/contracts/src/emit-openapi.ts",
+    "dev": "docker compose up --build",
+    "check": "npm run typecheck && npm run lint && npm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1"
+  }
+}
