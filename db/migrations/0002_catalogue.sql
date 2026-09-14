@@ -8,8 +8,6 @@
 -- Nothing here is PHI. It is world-readable to an authenticated client and
 -- writable only by the catalogue service.
 
-BEGIN;
-
 -- The health areas.
 --
 -- `status` and `published_on_site` are separate columns on purpose. The website
@@ -175,5 +173,3 @@ CREATE TABLE catalogue.screen_content (
   FOREIGN KEY (product_id, screen_id)
     REFERENCES catalogue.product_screen(product_id, screen_id) ON DELETE CASCADE
 );
-
-COMMIT;

@@ -12,8 +12,6 @@
 -- table owner bypasses its own policies, and the owner is who migrations and
 -- maintenance scripts connect as.
 
-BEGIN;
-
 -- ---------------------------------------------------------------------------
 -- programme.enrolment
 -- ---------------------------------------------------------------------------
@@ -277,5 +275,3 @@ CREATE POLICY observation_own ON record.observation
                   WHERE e.id = enrolment_id AND e.account_id = app_account_id()))
   WITH CHECK (EXISTS (SELECT 1 FROM programme.enrolment e
                   WHERE e.id = enrolment_id AND e.account_id = app_account_id()));
-
-COMMIT;

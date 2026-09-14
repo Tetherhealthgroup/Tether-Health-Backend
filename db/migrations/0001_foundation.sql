@@ -6,7 +6,21 @@
 -- tables. Separation here is enforced by the database rather than by everyone
 -- remembering.
 
-BEGIN;
+-- No BEGIN/COMMIT in this file, and none in any migration.
+--
+-- `db/migrate.ts` wraps each file in a transaction together with the ledger
+-- insert, so that applying a migration and recording that it was applied
+-- succeed or fail as one act. A `COMMIT` in here would end that transaction
+-- early and leave the ledger row to commit separately — so a failure between
+-- the two would produce a migration that has run and is not recorded, which
+-- the next run would apply a second time.
+--
+-- `db/migrate.ts` enforces this; a file containing transaction control is
+-- rejected rather than executed.
+
+-- `citext` for case-insensitive email. `gen_random_uuid()` needs no extension
+-- on PostgreSQL 13+, which docker-compose pins well above.
+CREATE EXTENSION IF NOT EXISTS citext;
 
 CREATE SCHEMA IF NOT EXISTS identity;    -- accounts, guardians, sessions
 CREATE SCHEMA IF NOT EXISTS catalogue;   -- the design bundle. Non-PHI.
@@ -140,5 +154,3 @@ CREATE TABLE ops.waitlist_enquiry (
 );
 
 CREATE INDEX waitlist_purge ON ops.waitlist_enquiry(purge_after);
-
-COMMIT;
