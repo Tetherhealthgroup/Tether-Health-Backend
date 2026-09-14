@@ -1,0 +1,455 @@
+# The local stack: a real database, a real cache, and all nine services.
+#
+# ---------------------------------------------------------------------------
+# Three decisions worth reading before changing anything here
+# ---------------------------------------------------------------------------
+#
+# 1 · Postgres runs HERE.
+#
+#     The repo this is modelled on shipped a "local development" compose file
+#     whose services pointed at the production Supabase instance. Every
+#     developer running it was one `DELETE` away from live patient data, and
+#     nothing in the file said so. There is a real postgres:16-alpine below with
+#     its own volume, and `.env.example` ships a local DSN. Production
+#     credentials do not belong in a file whose purpose is to be run casually.
+#
+# 2 · Only the gateway publishes a host port.
+#
+#     `ports:` appears exactly once, on api-gateway. Everything else is
+#     `expose:` — reachable from inside the compose network and from nowhere
+#     else. The eight internal services verify JWTs themselves, but a service
+#     that is not listening on the host cannot be reached by something that
+#     bypassed the gateway in the first place.
+#
+#     The network is deliberately NOT `internal: true`. Services need egress:
+#     the JWKS endpoint for token verification, and FCM from
+#     notification-service. `internal: true` would block both, and the symptom
+#     would be every request failing to authenticate with a timeout.
+#
+# 3 · Nothing here applies migrations on start.
+#
+#     The model repo applied unreviewed migrations to production on every push
+#     to main. The habit starts in a compose file: once `up` migrates, the
+#     deploy pipeline does too, and then a bad migration is a production
+#     incident rather than a failed check. Migrations are applied by running
+#     `npm run db:migrate` deliberately — or the opt-in `migrate` profile at the
+#     bottom of this file, which never runs unless it is asked for by name.
+#
+# ---------------------------------------------------------------------------
+# Build context
+# ---------------------------------------------------------------------------
+#
+# Every service sets `context: .` — the repository root — with
+# `dockerfile: services/<name>/Dockerfile`. That is what lets `@tether/core`
+# resolve inside an image. The model repo used the service directory as its
+# context, so its `shared/` package was outside the build and unreachable, and
+# the workspace quietly rotted.
+
+name: tether-health
+
+# ---------------------------------------------------------------------------
+# Shared fragments
+# ---------------------------------------------------------------------------
+
+# Everything `@tether/core`'s `baseSchema` needs and every service shares.
+# One copy, for the same reason the middleware is one package: ten copies of a
+# body limit had already drifted in the repo this is modelled on.
+x-service-env: &service-env
+  NODE_ENV: ${NODE_ENV:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+  JWT_ISSUER: ${JWT_ISSUER}
+  JWT_AUDIENCE: ${JWT_AUDIENCE}
+  JWT_JWKS_URL: ${JWT_JWKS_URL}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-RS256}
+  DB_STATEMENT_TIMEOUT_MS: ${DB_STATEMENT_TIMEOUT_MS:-5000}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
+  BODY_LIMIT: ${BODY_LIMIT:-512kb}
+  RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-60000}
+  RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-100}
+
+# `unless-stopped`, not `always`: a container a developer stopped on purpose
+# should stay stopped across a reboot.
+#
+# `init: true` gives the container a real PID 1 to reap orphans. Node installs
+# its own SIGTERM handling in `@tether/core`'s `start()`, so shutdown is already
+# graceful; this is about zombie processes, which are miserable to diagnose and
+# free to prevent.
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  init: true
+  networks: [tether]
+  # Ceilings, not reservations. A service that leaks is restarted by the
+  # orchestrator instead of pushing the machine into swap and taking the
+  # database down with it — which is the failure that turns one broken service
+  # into an outage.
+  deploy:
+    resources:
+      limits:
+        cpus: '0.75'
+        memory: 512M
+      reservations:
+        memory: 128M
+
+# `condition: service_healthy` everywhere, never a bare `depends_on`.
+#
+# A bare dependency means "start this container second", which is not the same
+# as "the thing it needs is answering". Postgres accepts TCP connections several
+# seconds before it accepts queries, so a plain ordering guarantees a crash loop
+# on a cold start and nothing else.
+x-depends-on-data: &depends-on-data
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  # -------------------------------------------------------------------------
+  # Data
+  # -------------------------------------------------------------------------
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [tether]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tether}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tether_local_only}
+      POSTGRES_DB: ${POSTGRES_DB:-tether}
+      # Deterministic collation, so an index built on a laptop and one built in
+      # CI order text the same way.
+      POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # No `ports:`. Reaching the database from the host is
+    # `docker compose exec postgres psql`, which is one keystroke longer and
+    # cannot be reached by anything else on the network.
+    expose:
+      - '5432'
+    healthcheck:
+      # `-U` and `-d` matter: without them pg_isready checks the default
+      # database, which reports healthy while the one the services need is still
+      # being created by initdb.
+      test:
+        ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-tether} -d ${POSTGRES_DB:-tether}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      # Failures during `start_period` do not count toward `retries`, so a slow
+      # first-run initdb is not mistaken for a broken container.
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [tether]
+    # A password even locally. The habit of running an unauthenticated Redis is
+    # how one ends up exposed; `requirepass` costs one line.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:-redis_local_only}
+      - --appendonly
+      - 'yes'
+      - --maxmemory
+      - 256mb
+      # Cache, not a store: evict rather than start refusing writes.
+      - --maxmemory-policy
+      - allkeys-lru
+    volumes:
+      - redis-data:/data
+    expose:
+      - '6379'
+    healthcheck:
+      test:
+        ['CMD-SHELL', 'redis-cli -a "${REDIS_PASSWORD:-redis_local_only}" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 320M
+
+  # -------------------------------------------------------------------------
+  # The edge
+  # -------------------------------------------------------------------------
+
+  api-gateway:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: api-gateway
+      PORT: '8000'
+      DATABASE_URL: ${GATEWAY_DATABASE_URL}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/0
+      # Where the gateway forwards to. Container names on the compose network;
+      # none of these is resolvable from the host, which is the point.
+      AUTH_SERVICE_URL: http://auth-service:8001
+      CATALOGUE_SERVICE_URL: http://catalogue-service:8002
+      ENROLMENT_SERVICE_URL: http://enrolment-service:8003
+      RECORDS_SERVICE_URL: http://records-service:8004
+      CARE_TEAM_SERVICE_URL: http://care-team-service:8005
+      NOTIFICATION_SERVICE_URL: http://notification-service:8006
+      WEBSITE_SERVICE_URL: http://website-service:8007
+      CHRONIC_SERVICE_URL: http://chronic-service:8008
+    # The only published port in the file.
+    ports:
+      - '${GATEWAY_HOST_PORT:-8000}:8000'
+    depends_on:
+      <<: *depends-on-data
+      auth-service:
+        condition: service_healthy
+      catalogue-service:
+        condition: service_healthy
+      enrolment-service:
+        condition: service_healthy
+      records-service:
+        condition: service_healthy
+      care-team-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+      website-service:
+        condition: service_healthy
+      chronic-service:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8000/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # Services
+  # -------------------------------------------------------------------------
+
+  auth-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: auth-service
+      PORT: '8001'
+      DATABASE_URL: ${AUTH_DATABASE_URL}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/1
+    expose:
+      - '8001'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8001/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  catalogue-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/catalogue-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: catalogue-service
+      PORT: '8002'
+      DATABASE_URL: ${CATALOGUE_DATABASE_URL}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/2
+    expose:
+      - '8002'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8002/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  enrolment-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/enrolment-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: enrolment-service
+      PORT: '8003'
+      DATABASE_URL: ${ENROLMENT_DATABASE_URL}
+    expose:
+      - '8003'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8003/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  records-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/records-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: records-service
+      PORT: '8004'
+      DATABASE_URL: ${RECORDS_DATABASE_URL}
+    expose:
+      - '8004'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8004/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  care-team-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/care-team-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: care-team-service
+      PORT: '8005'
+      DATABASE_URL: ${CARE_TEAM_DATABASE_URL}
+    expose:
+      - '8005'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8005/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  notification-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/notification-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: notification-service
+      PORT: '8006'
+      DATABASE_URL: ${NOTIFICATION_DATABASE_URL}
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
+      # Unset locally, and that is supported: the service starts and logs that
+      # push is disabled. Nobody should need a Firebase project to run the
+      # stack. In production this is injected by the secret store — never baked
+      # into the image, never committed.
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${FIREBASE_SERVICE_ACCOUNT_JSON:-}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+    expose:
+      - '8006'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8006/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  website-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/website-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: website-service
+      PORT: '8007'
+      DATABASE_URL: ${WEBSITE_DATABASE_URL}
+      WAITLIST_DEDUPE_WINDOW_MS: ${WAITLIST_DEDUPE_WINDOW_MS:-900000}
+      WAITLIST_RATE_LIMIT_MAX: ${WAITLIST_RATE_LIMIT_MAX:-5}
+      WAITLIST_RATE_LIMIT_WINDOW_MS: ${WAITLIST_RATE_LIMIT_WINDOW_MS:-3600000}
+      WAITLIST_PURGE_BATCH: ${WAITLIST_PURGE_BATCH:-1000}
+      ADMIN_ROLE: ${ADMIN_ROLE:-admin}
+    expose:
+      - '8007'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8007/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  chronic-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/chronic-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: chronic-service
+      PORT: '8008'
+      DATABASE_URL: ${CHRONIC_DATABASE_URL}
+      CHRONIC_VITALS_PAGE_MAX: ${CHRONIC_VITALS_PAGE_MAX:-500}
+      CHRONIC_VITALS_PAGE_DEFAULT: ${CHRONIC_VITALS_PAGE_DEFAULT:-200}
+    expose:
+      - '8008'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8008/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # Migrations — opt-in, and never part of `up`
+  # -------------------------------------------------------------------------
+
+  # Run explicitly:
+  #
+  #     docker compose --profile migrate run --rm db-migrate
+  #
+  # The `profiles` key is what keeps it out of `docker compose up`. Applying
+  # migrations has to be something somebody does, not something that happens:
+  # the model repo's pipeline ran them on every push to main with no gate, and
+  # a schema change reached production before anybody had read it.
+  #
+  # It borrows website-service's image rather than having one of its own,
+  # because that image already contains the workspace, `pg`, and a copy of
+  # `db/`. A dedicated Dockerfile under `db/` would be tidier and belongs to
+  # whoever owns that directory.
+  db-migrate:
+    profiles: ['migrate']
+    build:
+      context: .
+      dockerfile: services/website-service/Dockerfile
+    networks: [tether]
+    environment:
+      # The migration role needs DDL rights, which no service role has. Falls
+      # back to the superuser DSN for a local database, where they are the same
+      # thing and nobody is served by a second password.
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgres://${POSTGRES_USER:-tether}:${POSTGRES_PASSWORD:-tether_local_only}@postgres:5432/${POSTGRES_DB:-tether}}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    command: ['node', '--experimental-strip-types', 'db/migrate.ts']
+
+networks:
+  tether:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:

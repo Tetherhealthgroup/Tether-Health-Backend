@@ -1,0 +1,14 @@
+{
+  "name": "@tether/catalogue-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.ts",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@tether/core": "*",
+    "@tether/contracts": "*"
+  }
+}

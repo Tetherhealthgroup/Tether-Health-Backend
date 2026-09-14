@@ -1,0 +1,19 @@
+{
+  "name": "@tether/chronic-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bridge for the chronic-care Flutter app. Its entities live in the chronic schema.",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts"
+  },
+  "dependencies": {
+    "@tether/core": "*",
+    "express": "^4.21.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21"
+  }
+}

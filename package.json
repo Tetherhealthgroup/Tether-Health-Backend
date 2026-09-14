@@ -5,7 +5,7 @@
   "description": "Backend for the Tether Health platform: the patient apps, the clinician surface and the website.",
   "license": "UNLICENSED",
   "engines": {
-    "node": ">=20.11.0"
+    "node": ">=22.6.0"
   },
   "workspaces": [
     "packages/*",
@@ -16,7 +16,7 @@
     "typecheck": "tsc --build --verbose",
     "lint": "eslint .",
     "format": "prettier --check .",
-    "test": "node --test --experimental-test-coverage \"packages/*/test/**/*.test.ts\" \"services/*/test/**/*.test.ts\"",
+    "test": "node --test --experimental-strip-types \"db/test/**/*.test.ts\" \"packages/*/test/**/*.test.ts\" \"services/*/test/**/*.test.ts\"",
     "db:migrate": "node --experimental-strip-types db/migrate.ts",
     "db:seed": "node --experimental-strip-types db/seed.ts",
     "openapi": "node --experimental-strip-types packages/contracts/src/emit-openapi.ts",
@@ -29,6 +29,7 @@
     "prettier": "^3.4.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.18.1"
+    "typescript-eslint": "^8.18.1",
+    "@eslint/js": "^9.17.0"
   }
 }

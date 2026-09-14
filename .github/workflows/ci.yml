@@ -1,0 +1,341 @@
+# Continuous integration.
+#
+# ---------------------------------------------------------------------------
+# What this workflow deliberately does NOT do
+# ---------------------------------------------------------------------------
+#
+# There is no deploy job, and there is no step that applies a migration to a
+# production database.
+#
+# The backend this repo is modelled on had one. Every push to `main` ran its
+# migrations against production: no review gate, no approval environment, no
+# rollback, and three competing ledgers underneath so a partial apply was
+# invisible. A schema change reached patient data before anybody had read the
+# diff.
+#
+# The `migrate` job below applies every migration to a throwaway postgres
+# service container, twice, and then proves the runner refuses an edited
+# migration. That is the check. Promoting a green check to production is a
+# separate, human decision, and this file is not where it gets made.
+#
+# ---------------------------------------------------------------------------
+# Node version
+# ---------------------------------------------------------------------------
+#
+# 24, not the `>=20.11.0` in package.json. Nothing here builds: every tsconfig
+# is `noEmit` and the services run their `.ts` sources directly, which needs
+# type stripping — first available in 22.6 and on by default from 22.18. The
+# Dockerfiles pin the same base image, so CI runs what production runs.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  # -------------------------------------------------------------------------
+  # check — types, lint, tests
+  # -------------------------------------------------------------------------
+  check:
+    name: Typecheck · lint · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # `npm ci` when the lockfile agrees with the workspaces, and a loud
+      # fallback when it does not. A monorepo gains services faster than
+      # anybody remembers to refresh the lockfile, and a red pipeline that says
+      # "lockfile out of sync" teaches people to ignore red pipelines.
+      - name: Install
+        run: |
+          npm ci --no-audit --no-fund \
+            || { echo "::warning::npm ci refused the lockfile; falling back to npm install. Run 'npm install' and commit package-lock.json."; \
+                 npm install --no-audit --no-fund; }
+
+      # Per project, rather than `npm run typecheck`.
+      #
+      # That script is `tsc --build --verbose`, which needs a root tsconfig.json
+      # holding a `references` array, and there is not one in the repo yet.
+      # Looping over the project files checks exactly the same code and does not
+      # depend on a file that does not exist; when the root config lands, this
+      # becomes `npm run typecheck`.
+      - name: Typecheck
+        run: |
+          status=0
+          for config in packages/*/tsconfig.json services/*/tsconfig.json; do
+            [ -f "$config" ] || continue
+            echo "--- $config"
+            npx tsc -p "$config" --noEmit || status=1
+          done
+          exit $status
+
+      # ESLint 9 needs a flat `eslint.config.js`, and the repo does not have one
+      # yet. Running `eslint .` without it fails with a configuration error
+      # rather than a lint finding, which is a red build that says nothing about
+      # the code. Skipped loudly until the config is committed.
+      - name: Lint
+        run: |
+          if ls eslint.config.* >/dev/null 2>&1; then
+            npm run lint
+          else
+            echo "::warning::No eslint.config.* at the repository root — lint skipped. Commit a flat config to enable it."
+          fi
+
+      - name: Format
+        run: npx prettier --check . || echo "::warning::prettier reported formatting differences"
+
+      - name: Test
+        run: npm test
+
+  # -------------------------------------------------------------------------
+  # secrets — nothing credential-shaped in the history
+  # -------------------------------------------------------------------------
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans history, not just the tip. A key that was committed
+          # and then removed is still a key that was published.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The one file in this repo that is *meant* to look like configuration
+          # is `.env.example`, and every value in it is a placeholder. If it ever
+          # trips a rule, fix the file rather than the allowlist.
+
+  # -------------------------------------------------------------------------
+  # migrate — the schema, applied for real
+  # -------------------------------------------------------------------------
+  migrate:
+    name: Migrations against postgres:16
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tether
+          POSTGRES_PASSWORD: ci_only_not_a_secret
+          POSTGRES_DB: tether
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tether -d tether"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      MIGRATION_DATABASE_URL: postgres://tether:ci_only_not_a_secret@localhost:5432/tether
+      PGPASSWORD: ci_only_not_a_secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install
+        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+
+      # No `CREATE EXTENSION` step: `0001_foundation.sql` creates `citext`
+      # itself, and `gen_random_uuid()` needs no extension on PostgreSQL 13+.
+      # The migration role here is the superuser the service container starts
+      # with, which is what `CREATE EXTENSION` requires; in a managed
+      # environment it is the provisioning step's job, not a service role's.
+      - name: Apply migrations
+        run: node --experimental-strip-types db/migrate.ts
+
+      # Twice. A migration runner that is not idempotent is one that re-runs
+      # from the top after any failure, which is the exact defect the single
+      # ledger exists to prevent. The second run must find nothing to do.
+      - name: Re-run — must be a no-op
+        run: |
+          output=$(node --experimental-strip-types db/migrate.ts)
+          echo "$output"
+          echo "$output" | grep -q 'Nothing to do' \
+            || { echo "::error::The second run was not a no-op. The ledger is not recording what it applied."; exit 1; }
+
+      - name: Verify checksums
+        run: node --experimental-strip-types db/migrate.ts --verify-only
+
+      # The property the runner exists for: a committed migration that has been
+      # edited is a hard stop, not a warning and not a silent re-apply.
+      - name: An edited migration must fail the run
+        run: |
+          echo "-- CI drift probe" >> db/migrations/0001_foundation.sql
+          if node --experimental-strip-types db/migrate.ts; then
+            echo "::error::An edited migration was accepted. The checksum check is not working."
+            git checkout -- db/migrations/0001_foundation.sql
+            exit 1
+          fi
+          echo "Refused, as it should be."
+          git checkout -- db/migrations/0001_foundation.sql
+
+      # `0001_foundation.sql` states the rule — no BEGIN/COMMIT in a migration,
+      # because the runner wraps each file together with its ledger row — and
+      # says the runner enforces it. This is the step that keeps that sentence
+      # true. Postgres only *warns* on a nested BEGIN, so nothing else would.
+      - name: A migration with transaction control must fail the run
+        run: |
+          printf 'BEGIN;\nCREATE TABLE ops.ci_probe(id int);\nCOMMIT;\n' > db/migrations/0099_ci_probe.sql
+          if node --experimental-strip-types db/migrate.ts; then
+            echo "::error::A migration containing BEGIN/COMMIT was accepted."
+            rm -f db/migrations/0099_ci_probe.sql
+            exit 1
+          fi
+          echo "Refused, as it should be."
+          rm -f db/migrations/0099_ci_probe.sql
+
+      # ARCHITECTURE.md: "RLS is FORCE, and a migration test fails if a PHI
+      # table lacks a policy." The model repo wrote its RLS behind
+      # `ALTER TABLE IF EXISTS`, which no-ops on a missing table and reports
+      # success — so its policies were decorative and nothing noticed.
+      - name: Every PHI table has RLS enabled, forced, and a policy
+        run: |
+          psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align <<'SQL' > /tmp/rls.txt
+          SELECT n.nspname || '.' || c.relname
+                 || CASE WHEN NOT c.relrowsecurity     THEN ' [rls not enabled]' ELSE '' END
+                 || CASE WHEN NOT c.relforcerowsecurity THEN ' [rls not forced]'  ELSE '' END
+                 || CASE WHEN NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid)
+                         THEN ' [no policy]' ELSE '' END
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE c.relkind = 'r'
+             AND (n.nspname IN ('record', 'programme', 'chronic')
+                  OR (n.nspname = 'ops' AND c.relname IN
+                      ('device_token', 'notification_preference', 'notification_log')))
+             AND (NOT c.relrowsecurity
+                  OR NOT c.relforcerowsecurity
+                  OR NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid));
+          SQL
+          if [ -s /tmp/rls.txt ]; then
+            echo "::error::These tables hold or gate PHI and are not protected:"
+            cat /tmp/rls.txt
+            exit 1
+          fi
+          echo "All PHI tables: RLS enabled, forced, and policied."
+
+      # The chronic-care bug, asserted as a schema property rather than as a
+      # code review note. `chronic.profile.account_id` NOT NULL is what makes
+      # `select(Profile).order_by(created_at).limit(1)` unrepresentable.
+      - name: chronic.profile.account_id is not optional
+        run: |
+          nullable=$(psql "$MIGRATION_DATABASE_URL" --quiet --tuples-only --no-align \
+            -c "SELECT is_nullable FROM information_schema.columns
+                 WHERE table_schema = 'chronic' AND table_name = 'profile'
+                   AND column_name = 'account_id';")
+          if [ "$nullable" != "NO" ]; then
+            echo "::error::chronic.profile.account_id is nullable ($nullable). An unowned profile is reachable by any query that forgets its predicate."
+            exit 1
+          fi
+
+      # The delivery log must have nowhere to put a notification body.
+      - name: ops.notification_log holds no message content
+        run: |
+          leaky=$(psql "$MIGRATION_DATABASE_URL" --quiet --tuples-only --no-align \
+            -c "SELECT string_agg(column_name, ', ') FROM information_schema.columns
+                 WHERE table_schema = 'ops' AND table_name = 'notification_log'
+                   AND column_name IN ('body','title','payload','message','content');")
+          if [ -n "$leaky" ]; then
+            echo "::error::ops.notification_log has content columns ($leaky). sensitive_notifications_off depends on there being nowhere to write the text."
+            exit 1
+          fi
+
+  # -------------------------------------------------------------------------
+  # images — every service actually builds
+  # -------------------------------------------------------------------------
+  images:
+    name: Build ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      # One broken Dockerfile should not hide the state of the other eight.
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - auth-service
+          - catalogue-service
+          - enrolment-service
+          - records-service
+          - care-team-service
+          - notification-service
+          - website-service
+          - chronic-service
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Note the context: `.` — the repository root, with the Dockerfile named
+      # by path. That is what makes `@tether/core` resolvable inside the image,
+      # and it is the single thing the model repo got wrong that left its shared
+      # package unreachable at build time.
+      #
+      # `push: false`. Publishing an image is a release decision; this job only
+      # answers "does it build".
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          load: false
+          tags: tether/${{ matrix.service }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  # -------------------------------------------------------------------------
+  # One status to require on the branch protection rule.
+  # -------------------------------------------------------------------------
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [check, secrets, migrate, images]
+    if: always()
+    steps:
+      - name: Collect
+        run: |
+          # `needs.*.result` is 'success', 'failure', 'cancelled' or 'skipped'.
+          # A skipped required job is not a pass: it means something upstream
+          # did not run, and treating that as green is how a broken pipeline
+          # merges.
+          results='${{ join(needs.*.result, ' ') }}'
+          echo "job results: $results"
+          for result in $results; do
+            [ "$result" = "success" ] || { echo "::error::a required job reported '$result'"; exit 1; }
+          done

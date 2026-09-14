@@ -1,0 +1,17 @@
+{
+  "//": "Root project. `npm run typecheck` builds every workspace through these references, so one command checks the whole repo and a broken cross-package import is caught here rather than in a service's own narrow check.",
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/contracts" },
+    { "path": "services/api-gateway" },
+    { "path": "services/auth-service" },
+    { "path": "services/catalogue-service" },
+    { "path": "services/enrolment-service" },
+    { "path": "services/records-service" },
+    { "path": "services/care-team-service" },
+    { "path": "services/notification-service" },
+    { "path": "services/website-service" },
+    { "path": "services/chronic-service" }
+  ]
+}

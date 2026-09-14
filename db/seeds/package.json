@@ -1,0 +1,7 @@
+{
+  "name": "@tether/seeds",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Marks db/seeds as ESM. The repository root package.json declares no `type`, so without this Node and tsc both read these files as CommonJS and refuse the import syntax, `import.meta` and the top-level await the seeds are written with. Not a workspace — the workspace globs are packages/* and services/* — so it adds no install step."
+}
