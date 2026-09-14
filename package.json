@@ -2,6 +2,7 @@
   "name": "tether-health-backend",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Backend for the Tether Health platform: the patient apps, the clinician surface and the website.",
   "license": "UNLICENSED",
   "engines": {

@@ -51,7 +51,10 @@ test('two active programmes refuse a third, and name the longest-running one', (
   assert.ok(isProblem(refusal));
   assert.equal(refusal.type, ProblemType.atProgrammeCeiling);
   assert.equal(refusal.status, 409);
-  assert.equal(refusal.context?.wouldPause, 'tobacco');
+  // On `extensions`, not `context`: the join screen has to render which
+  // programme would be paused, and `context` is never serialised.
+  assert.equal(refusal.extensions?.wouldPause, 'tobacco');
+  assert.equal(refusal.toBody().wouldPause, 'tobacco');
 });
 
 test('naming a programme to pause makes room in the same request', () => {
@@ -160,7 +163,8 @@ test('a deferred trigger violation at COMMIT becomes the ceiling problem, not a 
       assert.ok(isProblem(error));
       assert.equal(error.type, ProblemType.atProgrammeCeiling);
       assert.equal(error.status, 409);
-      assert.equal(error.context?.wouldPause, 'tobacco');
+      assert.equal(error.extensions?.wouldPause, 'tobacco');
+      assert.equal(error.toBody().wouldPause, 'tobacco');
       return true;
     },
   );

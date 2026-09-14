@@ -68,6 +68,8 @@ export interface ProblemBody {
   readonly instance?: string;
   readonly requestId?: string;
   readonly errors?: readonly FieldError[];
+  /** RFC 7807 extension members. See [ProblemError.extensions]. */
+  readonly [key: string]: unknown;
 }
 
 /**
@@ -100,6 +102,26 @@ export class ProblemError extends Error {
   /** Extra context for the log only. Never serialised to the client. */
   readonly context?: Readonly<Record<string, unknown>>;
 
+  /**
+   * RFC 7807 extension members — serialised into the body.
+   *
+   * Distinct from [context], and the distinction is the point. Context is for
+   * whoever reads the logs; extensions are for the client, and therefore for
+   * anyone who can see the response. Putting the two in one bag is how a
+   * diagnostic detail ends up on the wire.
+   *
+   * It exists because conflating them produced a real bug: `wouldPause` was
+   * passed as context, so a 409 at the two-programme ceiling could not tell the
+   * join screen which programme it would have to pause — and naming that is the
+   * whole difference between offering the person a trade and performing one
+   * behind their back.
+   *
+   * Nothing here may be PHI. Every value must be something the caller either
+   * sent or is already entitled to see; an area id they are trying to join
+   * qualifies, a diagnosis does not.
+   */
+  readonly extensions?: Readonly<Record<string, unknown>>;
+
   constructor(
     type: ProblemTypeValue,
     status: number,
@@ -107,6 +129,7 @@ export class ProblemError extends Error {
     options: {
       fields?: readonly FieldError[];
       context?: Readonly<Record<string, unknown>>;
+      extensions?: Readonly<Record<string, unknown>>;
       cause?: unknown;
     } = {},
   ) {
@@ -116,10 +139,14 @@ export class ProblemError extends Error {
     this.status = status;
     this.fields = options.fields;
     this.context = options.context;
+    this.extensions = options.extensions;
   }
 
   toBody(requestId?: string, instance?: string): ProblemBody {
     return {
+      // Extensions first, so a member can never overwrite a reserved field —
+      // an `extensions.status` of 200 on a 409 would be worse than useless.
+      ...(this.extensions ?? {}),
       type: `${problemBase}/${this.type}`,
       title: this.type,
       status: this.status,
@@ -147,12 +174,18 @@ export const problem = {
   conflict: (detail: string) =>
     new ProblemError(ProblemType.conflict, 409, detail),
 
+  /**
+   * [wouldPause] is an extension member, not context, because the client has
+   * to render it: `SH3`'s copy is "Joining this would pause Healthy weight",
+   * which turns a refusal into a choice the person makes. An area id is not
+   * PHI — it is the thing they just asked to join.
+   */
   atProgrammeCeiling: (wouldPause: string | null) =>
     new ProblemError(
       ProblemType.atProgrammeCeiling,
       409,
       'Two programmes are already active. Pause one to start another.',
-      { context: { wouldPause } },
+      { extensions: { wouldPause } },
     ),
 
   areaNotImplemented: (areaId: string) =>

@@ -1,0 +1,5 @@
+{
+  "//": "The migration runner and the invariant tests. Included in the root project references so that `npm run typecheck` covers them — they were outside it until now, which is how a stale function reference in migrate.ts survived review.",
+  "extends": "../tsconfig.base.json",
+  "include": ["*.ts", "test/**/*.ts", "seeds/**/*.ts"]
+}
