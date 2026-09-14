@@ -10,9 +10,14 @@ import { fileURLToPath } from 'node:url';
  * None of this executes SQL — there is no Postgres in the environment these
  * run in. What it does check is the set of properties that, when they broke in
  * the backend this repo is modelled on, were not noticed until a fresh
- * environment failed to build: a migration that silently closes the runner's
- * transaction, a number used twice on two branches, a committed file edited
- * after the fact.
+ * environment failed to build.
+ *
+ * These were enforced by a custom runner until the migrations moved to
+ * `supabase/migrations/` so that the GitHub integration's preview branches
+ * could see them. The Supabase CLI does not check any of them, so they are
+ * enforced here and gated in CI instead. That is the whole reason this file
+ * exists: the guards had to survive the move, or the move would have been a
+ * quiet downgrade.
  *
  * Every one of these was a real defect here first. The transaction-control
  * check below is the one that matters most: all seven files were originally
@@ -23,6 +28,8 @@ import { fileURLToPath } from 'node:url';
 const MIGRATIONS = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '..',
+  '..',
+  'supabase',
   'migrations',
 );
 
@@ -38,11 +45,11 @@ test('there are migrations to check', () => {
 });
 
 test('no migration manages its own transaction', () => {
-  // `db/migrate.ts` wraps each file together with its ledger row so the two
-  // commit as one. A `COMMIT` inside a file ends that transaction early and
-  // the ledger insert then commits separately — a failure in the gap leaves a
+  // The Supabase CLI wraps each file in a transaction together with its
+  // ledger row. A `COMMIT` inside a file ends that transaction early and the
+  // ledger insert then commits separately — a failure in the gap leaves a
   // migration that has run and is not recorded, and the next run applies it
-  // again.
+  // again. All seven files here were originally written this way.
   //
   // Anchored to the line start so `BEGIN … END` inside a plpgsql body, which
   // is block syntax rather than transaction control, is not matched.
@@ -66,18 +73,21 @@ test('no migration manages its own transaction', () => {
 });
 
 test('filenames sort into apply order', () => {
-  const pattern = /^\d{4}_[a-z0-9_]+\.sql$/;
+  // Supabase records the leading 14-digit UTC timestamp as the migration
+  // version in `supabase_migrations.schema_migrations`, and applies files in
+  // lexical order — so the prefix is what decides apply order, not a comment.
+  const pattern = /^\d{14}_[a-z0-9_]+\.sql$/;
   const malformed = files.filter((name) => !pattern.test(name));
-  assert.deepEqual(malformed, [], 'expected NNNN_snake_case.sql');
+  assert.deepEqual(malformed, [], 'expected YYYYMMDDHHmmss_snake_case.sql');
 });
 
-test('no two migrations share a number', () => {
-  // Two branches each adding "0006" is the normal way this happens. Lexical
-  // order would pick one to go first based on the rest of the filename, which
-  // is a coin toss deciding schema order.
+test('no two migrations share a version', () => {
+  // Two branches generating a migration in the same second. Supabase keys its
+  // ledger on the version, so a collision means one of the two is recorded as
+  // applied when it never ran.
   const byPrefix = new Map<string, string[]>();
   for (const name of files) {
-    const prefix = name.slice(0, 4);
+    const prefix = name.slice(0, 14);
     byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), name]);
   }
 

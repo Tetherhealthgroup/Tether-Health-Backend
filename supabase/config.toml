@@ -1,0 +1,71 @@
+# Supabase CLI configuration.
+#
+# The migrations in `supabase/migrations/` are applied by the CLI, and by the
+# GitHub integration on every pull request, which spins up a preview branch
+# with its own database. That is why they live here rather than under `db/`:
+# branching only looks in this directory.
+#
+# What moving them cost, and what replaces it. The previous runner enforced
+# three things the CLI does not, each of which had already caught a real defect
+# in this repo:
+#
+#   * no migration may open or close its own transaction — all seven files were
+#     written with `BEGIN`/`COMMIT`, which would have left every migration
+#     applied-but-unrecorded on any failure
+#   * no two migrations may share a version
+#   * a committed migration may not be edited afterwards
+#
+# Those are now CI gates in `.github/workflows/ci.yml`, backed by
+# `db/test/migrations.test.ts`. A guard enforced by a test that runs on every
+# push is not weaker than one enforced by a runner; it is only enforced
+# somewhere else, and that has to stay true.
+
+project_id = "tether-health"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "identity", "catalogue", "programme", "record", "care", "chronic", "ops"]
+extra_search_path = ["public"]
+# The catalogue is the only large read, and it is paginated by the service.
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+# Match the production Postgres so a migration cannot pass locally and fail on
+# deploy because of a version-dependent feature.
+major_version = 16
+
+[db.pooler]
+enabled = true
+default_pool_size = 20
+max_client_conn = 100
+
+[studio]
+enabled = true
+port = 54323
+
+[inbound_email]
+enabled = false
+
+[storage]
+enabled = false
+
+[auth]
+enabled = true
+# Overridden per environment. The CLI needs a value to start locally.
+site_url = "http://localhost:8000"
+additional_redirect_urls = ["http://localhost:8000"]
+
+# Fifteen minutes, matching the access-token lifetime the auth service issues.
+jwt_expiry = 900
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+
+[analytics]
+enabled = false

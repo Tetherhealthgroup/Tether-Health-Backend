@@ -1,0 +1,261 @@
+# Render Blueprint.
+#
+# One public service and eight private ones, which is the same topology the
+# docker-compose stack uses locally: only the gateway is reachable from the
+# internet, and everything behind it is on Render's private network.
+#
+# ── Read this before applying ────────────────────────────────────────────────
+#
+# Render was already connected to this repository by hand before this file
+# existed. Applying a Blueprint takes ownership of the services it names, so
+# check the dashboard first: if a service here has the same name as one already
+# defined there, the Blueprint's definition wins and any manual configuration
+# is replaced. Renaming a service in this file creates a new one and orphans
+# the old.
+#
+# ── Why private services rather than nine public ones ────────────────────────
+#
+# `pserv` instances have no public URL and are reachable only from other
+# services in the same Render account. That is the property the architecture
+# depends on: each service verifies its own JWT, but nothing else stands
+# between an internal service and the internet, so the network has to. It is
+# also the one thing the model backend got right — its compose file published
+# only the gateway.
+#
+# Private services are not available on Render's free tier. Nine services also
+# bill as nine services; if that is the wrong shape commercially, the honest
+# alternative is fewer, larger services rather than nine public ones.
+#
+# ── Not covered here ─────────────────────────────────────────────────────────
+#
+# Migrations. Nothing in this file applies them, deliberately: an auto-deploy
+# that also migrates means an unreviewed schema change reaching production on a
+# merge, which is exactly what the model repo did. Run `supabase db push`
+# behind an approval.
+
+services:
+  # ── Public ─────────────────────────────────────────────────────────────────
+  - type: web
+    name: tether-api-gateway
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/api-gateway/Dockerfile
+    # Repo root, so the npm workspace resolves inside the image. A context of
+    # the service directory is what made the model repo's shared package
+    # permanently unimportable.
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: api-gateway
+      - key: PORT
+        value: 8000
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+      # Render substitutes each private service's internal host:port.
+      - key: AUTH_SERVICE_URL
+        fromService: { type: pserv, name: tether-auth, property: connectionString }
+      - key: CATALOGUE_SERVICE_URL
+        fromService: { type: pserv, name: tether-catalogue, property: connectionString }
+      - key: ENROLMENT_SERVICE_URL
+        fromService: { type: pserv, name: tether-enrolment, property: connectionString }
+      - key: RECORDS_SERVICE_URL
+        fromService: { type: pserv, name: tether-records, property: connectionString }
+      - key: CARE_TEAM_SERVICE_URL
+        fromService: { type: pserv, name: tether-care-team, property: connectionString }
+      - key: NOTIFICATION_SERVICE_URL
+        fromService: { type: pserv, name: tether-notification, property: connectionString }
+      - key: WEBSITE_SERVICE_URL
+        fromService: { type: pserv, name: tether-website, property: connectionString }
+      - key: CHRONIC_SERVICE_URL
+        fromService: { type: pserv, name: tether-chronic, property: connectionString }
+
+  # ── Private ────────────────────────────────────────────────────────────────
+  - type: pserv
+    name: tether-auth
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/auth-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: auth-service
+      - key: PORT
+        value: 8001
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+      - fromGroup: tether-auth-secrets
+
+  - type: pserv
+    name: tether-catalogue
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/catalogue-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: catalogue-service
+      - key: PORT
+        value: 8002
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+  - type: pserv
+    name: tether-enrolment
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/enrolment-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: enrolment-service
+      - key: PORT
+        value: 8003
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+  - type: pserv
+    name: tether-records
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/records-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: records-service
+      - key: PORT
+        value: 8004
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+  - type: pserv
+    name: tether-care-team
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/care-team-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: care-team-service
+      - key: PORT
+        value: 8005
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+  - type: pserv
+    name: tether-notification
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/notification-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: notification-service
+      - key: PORT
+        value: 8006
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+      # Absent by design in most environments: the service starts without it
+      # and logs that push is disabled, rather than refusing to boot.
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+
+  - type: pserv
+    name: tether-website
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/website-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: website-service
+      - key: PORT
+        value: 8007
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+  - type: pserv
+    name: tether-chronic
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/chronic-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: chronic-service
+      - key: PORT
+        value: 8008
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+envVarGroups:
+  # Shared by every service. `sync: false` means Render does not read a value
+  # from this file — it is set once in the dashboard and never lives in git.
+  - name: tether-shared
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_ISSUER
+        sync: false
+      - key: JWT_AUDIENCE
+        sync: false
+      - key: JWT_JWKS_URL
+        sync: false
+      - key: JWT_ALGORITHM
+        value: RS256
+      - key: PUBLIC_API_URL
+        sync: false
+      # Exact origins. Empty denies everything, which is the intended failure
+      # mode for a value nobody configured.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: LOG_LEVEL
+        value: info
+      - key: BODY_LIMIT
+        value: 512kb
+
+  - name: tether-auth-secrets
+    envVars:
+      - key: SUPABASE_JWKS_URL
+        sync: false
+      - key: SUPABASE_ISSUER
+        sync: false
+      - key: JWT_PRIVATE_KEY_PEM
+        sync: false
+      - key: INTERNAL_SERVICE_TOKEN
+        sync: false

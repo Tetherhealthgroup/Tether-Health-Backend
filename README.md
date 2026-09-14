@@ -24,8 +24,45 @@ curl localhost:8000/healthz
 packages/core/          middleware, logging, errors, config, db, auth — one copy
 packages/contracts/     zod schemas; OpenAPI is generated from them
 services/               one directory per service, gateway on :8000
-db/migrations/          plain SQL, applied in lexical order by one ledger
+supabase/migrations/    plain SQL, applied by the Supabase CLI
+db/test/                the guards the CLI does not provide
+render.yaml             deployment: one public service, eight private
 ```
+
+## Deploying
+
+Render hosts the API. `render.yaml` defines the gateway as the only public
+service and the other eight as private ones with no public URL — the same
+topology as the local compose stack, because each service verifies its own JWT
+but nothing except the network stands between an internal service and the
+internet.
+
+Render was connected to this repository by hand before that file existed.
+**Applying a Blueprint takes ownership of the services it names**, so check the
+dashboard before the first apply.
+
+Nothing in the Blueprint applies migrations. That is deliberate: auto-deploy
+plus auto-migrate means an unreviewed schema change reaching production on a
+merge.
+
+## Migrations
+
+`supabase/migrations/`, applied with `npm run db:migrate` (`supabase db push`).
+They live there rather than under `db/` so the Supabase GitHub integration can
+see them and give each pull request a preview branch with its own database.
+
+The CLI does not check three things a previous custom runner did, each of which
+had already caught a real defect here:
+
+- **no migration may open or close its own transaction** — all seven files were
+  originally written with `BEGIN`/`COMMIT`, which ends the transaction holding
+  the ledger insert and leaves a migration applied but unrecorded
+- **no two migrations may share a version**
+- **RLS enabled *and* forced, with a policy attached, on every PHI table**
+
+Those are now `db/test/migrations.test.ts`, gated in CI. A guard enforced by a
+test that runs on every push is not weaker than one enforced by a runner — but
+it is enforced somewhere else, and that has to stay true.
 
 ## The rules this backend enforces
 

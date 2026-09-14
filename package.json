@@ -18,11 +18,13 @@
     "lint": "eslint .",
     "format": "prettier --check .",
     "test": "node --test --experimental-strip-types \"db/test/**/*.test.ts\" \"packages/*/test/**/*.test.ts\" \"services/*/test/**/*.test.ts\"",
-    "db:migrate": "node --experimental-strip-types db/migrate.ts",
+    "db:migrate": "supabase db push",
     "db:seed": "node --experimental-strip-types db/seed.ts",
     "openapi": "node --experimental-strip-types packages/contracts/src/emit-openapi.ts",
     "dev": "docker compose up --build",
-    "check": "npm run typecheck && npm run lint && npm run test"
+    "check": "npm run typecheck && npm run lint && npm run test",
+    "db:reset": "supabase db reset",
+    "db:diff": "supabase db diff"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
