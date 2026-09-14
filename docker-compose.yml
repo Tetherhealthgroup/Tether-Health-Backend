@@ -204,6 +204,7 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification-service:8006
       WEBSITE_SERVICE_URL: http://website-service:8007
       CHRONIC_SERVICE_URL: http://chronic-service:8008
+      REALTIME_SERVICE_URL: http://realtime-service:8009
     # The only published port in the file.
     ports:
       - '${GATEWAY_HOST_PORT:-8000}:8000'
@@ -224,6 +225,8 @@ services:
       website-service:
         condition: service_healthy
       chronic-service:
+        condition: service_healthy
+      realtime-service:
         condition: service_healthy
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8000/readyz || exit 1']
@@ -407,6 +410,27 @@ services:
     depends_on: *depends-on-data
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8008/readyz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  realtime-service:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: services/realtime-service/Dockerfile
+    environment:
+      <<: *service-env
+      SERVICE_NAME: realtime-service
+      PORT: '8009'
+      SSE_HEARTBEAT_SECONDS: ${SSE_HEARTBEAT_SECONDS:-25}
+      SSE_MAX_SUBSCRIBERS: ${SSE_MAX_SUBSCRIBERS:-2000}
+    expose:
+      - '8009'
+    depends_on: *depends-on-data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://127.0.0.1:8009/readyz || exit 1']
       interval: 10s
       timeout: 5s
       retries: 5

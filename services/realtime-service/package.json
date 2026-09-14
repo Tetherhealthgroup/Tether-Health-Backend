@@ -1,0 +1,17 @@
+{
+  "name": "@tether/realtime-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Server-Sent Events for clients that cannot add a Supabase SDK.",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "node --experimental-strip-types src/index.ts"
+  },
+  "dependencies": {
+    "@tether/core": "*",
+    "express": "^4.21.2",
+    "pg": "^8.13.1",
+    "zod": "^3.24.1"
+  }
+}

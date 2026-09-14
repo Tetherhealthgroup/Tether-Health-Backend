@@ -21,6 +21,7 @@ export const gatewaySchema = z.object({
   NOTIFICATION_SERVICE_URL: serviceUrl,
   WEBSITE_SERVICE_URL: serviceUrl,
   CHRONIC_SERVICE_URL: serviceUrl,
+  REALTIME_SERVICE_URL: serviceUrl,
 
   /**
    * How long the gateway waits for a downstream service before giving up.

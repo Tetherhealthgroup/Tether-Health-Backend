@@ -19,7 +19,8 @@ export type ServiceUrlKey =
   | 'CARE_TEAM_SERVICE_URL'
   | 'NOTIFICATION_SERVICE_URL'
   | 'WEBSITE_SERVICE_URL'
-  | 'CHRONIC_SERVICE_URL';
+  | 'CHRONIC_SERVICE_URL'
+  | 'REALTIME_SERVICE_URL';
 
 export interface RouteEntry {
   /** The public prefix, without a trailing slash. */
@@ -47,6 +48,7 @@ export const ROUTES: readonly RouteEntry[] = [
   { prefix: '/api/v1/notifications', service: 'notification-service', urlKey: 'NOTIFICATION_SERVICE_URL' },
   { prefix: '/api/v1/waitlist', service: 'website-service', urlKey: 'WEBSITE_SERVICE_URL' },
   { prefix: '/api/v1/chronic', service: 'chronic-service', urlKey: 'CHRONIC_SERVICE_URL' },
+  { prefix: '/api/v1/stream', service: 'realtime-service', urlKey: 'REALTIME_SERVICE_URL' },
 ];
 
 /**

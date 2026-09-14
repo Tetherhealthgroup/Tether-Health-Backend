@@ -37,6 +37,9 @@
     },
     {
       "path": "services/chronic-service"
+    },
+    {
+      "path": "services/realtime-service"
     }
   ]
 }

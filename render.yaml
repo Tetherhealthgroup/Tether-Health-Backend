@@ -1,6 +1,6 @@
 # Render Blueprint.
 #
-# One public service and eight private ones, which is the same topology the
+# One public service and nine private ones, which is the same topology the
 # docker-compose stack uses locally: only the gateway is reachable from the
 # internet, and everything behind it is on Render's private network.
 #
@@ -22,7 +22,7 @@
 # also the one thing the model backend got right — its compose file published
 # only the gateway.
 #
-# Private services are not available on Render's free tier. Nine services also
+# Private services are not available on Render's free tier. Ten services also
 # bill as nine services; if that is the wrong shape commercially, the honest
 # alternative is fewer, larger services rather than nine public ones.
 #
@@ -72,6 +72,8 @@ services:
         fromService: { type: pserv, name: tether-website, property: connectionString }
       - key: CHRONIC_SERVICE_URL
         fromService: { type: pserv, name: tether-chronic, property: connectionString }
+      - key: REALTIME_SERVICE_URL
+        fromService: { type: pserv, name: tether-realtime, property: connectionString }
 
   # ── Private ────────────────────────────────────────────────────────────────
   - type: pserv
@@ -219,6 +221,24 @@ services:
         value: chronic-service
       - key: PORT
         value: 8008
+      - key: NODE_ENV
+        value: production
+      - fromGroup: tether-shared
+
+  - type: pserv
+    name: tether-realtime
+    runtime: docker
+    plan: starter
+    region: oregon
+    dockerfilePath: ./services/realtime-service/Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: SERVICE_NAME
+        value: realtime-service
+      - key: PORT
+        value: 8009
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
