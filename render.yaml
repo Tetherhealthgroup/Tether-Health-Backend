@@ -26,6 +26,21 @@
 # bill as nine services; if that is the wrong shape commercially, the honest
 # alternative is fewer, larger services rather than nine public ones.
 #
+# ── One database login per service ───────────────────────────────────────────
+#
+# `DATABASE_URL` is set on each service that touches Postgres, and is not in the
+# `tether-shared` group. It used to be: one group, one value, and the value was
+# the project's superuser DSN, which bypasses row-level security — so every
+# service could read and delete every patient's rows (R-032). Each service now
+# connects as its own `tether_<service>_login` role (migrations 0009 to 0011),
+# which can reach only the schemas, tables and columns that service uses and to
+# which RLS applies. `tether-api-gateway` holds no data and has no DSN.
+#
+# `sync: false` below means Render reads no value from this file. The operator
+# creates each role's password out of band and pastes the matching DSN in the
+# dashboard: see db/ROLES.md for the order, and do it before the first deploy
+# of a build that contains these migrations.
+#
 # ── Not covered here ─────────────────────────────────────────────────────────
 #
 # Migrations. Nothing in this file applies them, deliberately: an auto-deploy
@@ -93,6 +108,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_auth_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
       - fromGroup: tether-auth-secrets
 
   - type: pserv
@@ -112,6 +131,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_catalogue_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
   - type: pserv
     name: tether-enrolment
@@ -130,6 +153,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_enrolment_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
   - type: pserv
     name: tether-records
@@ -148,6 +175,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_records_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
   - type: pserv
     name: tether-care-team
@@ -166,6 +197,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_care_team_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
   - type: pserv
     name: tether-notification
@@ -184,6 +219,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_notification_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
       # Absent by design in most environments: the service starts without it
       # and logs that push is disabled, rather than refusing to boot.
       - key: FIREBASE_SERVICE_ACCOUNT_JSON
@@ -206,6 +245,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_website_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
   - type: pserv
     name: tether-chronic
@@ -224,6 +267,10 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_chronic_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
   - type: pserv
     name: tether-realtime
@@ -242,14 +289,16 @@ services:
       - key: NODE_ENV
         value: production
       - fromGroup: tether-shared
+      # This service's own database login (`tether_realtime_login`, db/ROLES.md). Set in the
+      # dashboard; never in git, and never the project's superuser DSN.
+      - key: DATABASE_URL
+        sync: false
 
 envVarGroups:
   # Shared by every service. `sync: false` means Render does not read a value
   # from this file — it is set once in the dashboard and never lives in git.
   - name: tether-shared
     envVars:
-      - key: DATABASE_URL
-        sync: false
       - key: JWT_ISSUER
         sync: false
       - key: JWT_AUDIENCE

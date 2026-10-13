@@ -30,18 +30,31 @@
 -- auth-service — identity, and the proof of a deletion
 -- ---------------------------------------------------------------------------
 
--- 0004 already granted tether_auth its privileges, and its header is the
--- argument for them. Re-stated rather than assumed, because a later edit to
--- 0004's grants must not silently widen or narrow this role.
+-- 0004 already granted tether_auth table-wide SELECT, INSERT, UPDATE and DELETE on
+-- two tables, and its header is the argument for scoping this role to identity.
+-- Neither table is written whole by the code, and nothing deletes a session row
+-- (an account's sessions go with it by cascade, which runs as the table owner),
+-- so the table-wide grants are withdrawn and replaced by what the statements use.
+REVOKE ALL ON identity.account, identity.refresh_session FROM tether_auth;
+
 GRANT USAGE ON SCHEMA identity, ops TO tether_auth;
 
--- accounts.ts:70  INSERT … ON CONFLICT (external_id) DO UPDATE (sign-in upsert)
--- accounts.ts:114 SELECT by id (GET /me)
--- accounts.ts:165 SELECT … FOR UPDATE, then accounts.ts:196 DELETE (DELETE /me)
-GRANT SELECT, INSERT, UPDATE, DELETE ON identity.account TO tether_auth;
--- store.ts:64 SELECT … FOR UPDATE, store.ts:75 INSERT, store.ts:100,109,120 UPDATE
-GRANT SELECT, INSERT, UPDATE, DELETE ON identity.refresh_session TO tether_auth;
--- accounts.ts:179 INSERT only. The audit row outlives the account it describes.
+-- auth-service/src/accounts.ts:70 INSERT … ON CONFLICT (external_id) DO UPDATE
+--   (the sign-in upsert), :114 SELECT by id (GET /me), :165 SELECT … FOR UPDATE
+--   and :196 DELETE (DELETE /me, which cascades to every enrolment).
+GRANT SELECT, DELETE ON identity.account TO tether_auth;
+GRANT INSERT (external_id, email, last_seen_at) ON identity.account TO tether_auth;
+GRANT UPDATE (email, last_seen_at) ON identity.account TO tether_auth;
+
+-- auth-service/src/store.ts:64 SELECT … FOR UPDATE, :75 INSERT, :100,109,120 UPDATE
+-- of the revocation columns.
+GRANT SELECT ON identity.refresh_session TO tether_auth;
+GRANT INSERT (account_id, family_id, token_hash, issued_at, expires_at, user_agent, ip)
+  ON identity.refresh_session TO tether_auth;
+GRANT UPDATE (revoked_at, revoked_reason) ON identity.refresh_session TO tether_auth;
+
+-- auth-service/src/accounts.ts:179 INSERT only. The audit row outlives the
+-- account it describes.
 GRANT INSERT ON ops.audit_event TO tether_auth;
 
 -- ---------------------------------------------------------------------------
@@ -50,7 +63,7 @@ GRANT INSERT ON ops.audit_event TO tether_auth;
 
 GRANT USAGE ON SCHEMA catalogue TO tether_catalogue;
 
--- repository.ts:238-446 reads each of these and writes none. 0002 says the
+-- catalogue-service/src/repository.ts:238-468 reads each of these and writes none. 0002 says the
 -- catalogue is "writable only by the catalogue service", but the service has no
 -- write path: the bundle is loaded by `db/seeds/catalogue.ts` under the
 -- migration role. So this role does not get one.
@@ -67,27 +80,29 @@ TO tether_catalogue;
 
 GRANT USAGE ON SCHEMA programme, record, catalogue, ops TO tether_enrolment;
 
--- repository.ts:146,168,195 SELECT; :245 INSERT; :269,284 UPDATE status/ended_at/hidden.
--- Never deleted here: records-service owns erasure.
+-- enrolment-service/src/repository.ts:169,197,228 SELECT; :280 INSERT; :305,321
+-- UPDATE status/ended_at/hidden. Never deleted here: records-service owns erasure.
 GRANT SELECT ON programme.enrolment TO tether_enrolment;
 GRANT INSERT (account_id, area_id, status) ON programme.enrolment TO tether_enrolment;
 GRANT UPDATE (status, ended_at, hidden) ON programme.enrolment TO tether_enrolment;
 
--- repository.ts:136,348 SELECT; :372 INSERT; :319 UPDATE revoked_at (revocation
+-- repository.ts:154,394 SELECT; :428 INSERT; :357 UPDATE revoked_at (revocation
 -- is a column flip, never a DELETE, so the history survives).
 GRANT SELECT ON programme.sharing_consent TO tether_enrolment;
 GRANT INSERT (enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
   ON programme.sharing_consent TO tether_enrolment;
 GRANT UPDATE (revoked_at) ON programme.sharing_consent TO tether_enrolment;
 
--- repository.ts:452-479 reads the caller's own record to build the preview.
+-- repository.ts:504-541 reads the caller's own record to build the preview.
 -- Read-only: the preview sends nothing and changes nothing.
 GRANT SELECT ON record.observation, record.screen_answer, record.lapse_event TO tether_enrolment;
 
--- repository.ts:214 (shell_rule), :230 (area), :453 (measure label).
-GRANT SELECT ON catalogue.shell_rule, catalogue.area, catalogue.measure TO tether_enrolment;
+-- repository.ts:249 (shell_rule), :265 (area), :513 (measure label).
+GRANT SELECT (id, rule) ON catalogue.shell_rule TO tether_enrolment;
+GRANT SELECT (id, name, product_id) ON catalogue.area TO tether_enrolment;
+GRANT SELECT (id, label) ON catalogue.measure TO tether_enrolment;
 
--- audit.ts:73 INSERT.
+-- enrolment-service/src/audit.ts:73 INSERT.
 GRANT INSERT ON ops.audit_event TO tether_enrolment;
 
 -- ---------------------------------------------------------------------------
@@ -96,9 +111,9 @@ GRANT INSERT ON ops.audit_event TO tether_enrolment;
 
 GRANT USAGE ON SCHEMA programme, record, catalogue, ops TO tether_records;
 
--- postgres-store.ts:143,153,391 SELECT; :417 DELETE (DELETE /record).
+-- records-service/src/postgres-store.ts:143,153,391 SELECT; :417 DELETE (DELETE /record).
 GRANT SELECT, DELETE ON programme.enrolment TO tether_records;
--- postgres-store.ts:335 SELECT; :414 DELETE. Reads and erases; never writes a
+-- postgres-store.ts:334 SELECT; :402 DELETE. Reads and erases; never writes a
 -- consent, which is the person's act in enrolment-service.
 GRANT SELECT, DELETE ON programme.sharing_consent TO tether_records;
 
@@ -108,13 +123,13 @@ GRANT INSERT (enrolment_id, screen_id, block_index, kind, value)
   ON record.screen_answer TO tether_records;
 GRANT UPDATE (kind, value) ON record.screen_answer TO tether_records;
 
--- postgres-store.ts:229 INSERT; :412 DELETE. No UPDATE: a lapse is an event
+-- postgres-store.ts:229 INSERT; :402 DELETE. No UPDATE: a lapse is an event
 -- (0003 puts a rule on it as well).
 GRANT SELECT, DELETE ON record.lapse_event TO tether_records;
 GRANT INSERT (enrolment_id, occurred_at, severity, context)
   ON record.lapse_event TO tether_records;
 
--- postgres-store.ts:282 INSERT; :411 DELETE. Observations are immutable.
+-- postgres-store.ts:282 INSERT; :402 DELETE. Observations are immutable.
 GRANT SELECT, DELETE ON record.observation TO tether_records;
 GRANT INSERT (enrolment_id, measure_id, value_num, value_text, unit, observed_at, source, platform)
   ON record.observation TO tether_records;
@@ -122,7 +137,8 @@ GRANT INSERT (enrolment_id, measure_id, value_num, value_text, unit, observed_at
 -- postgres-store.ts:357 — the area's display name, for the export.
 GRANT SELECT (id, name) ON catalogue.area TO tether_records;
 
--- audit.ts:47 INSERT; postgres-store.ts:373 SELECT, to find a sync receipt.
+-- records-service/src/audit.ts:52 INSERT; postgres-store.ts:373 SELECT, to find
+-- a sync receipt.
 -- `audit_event_subject_read` (0010) limits that read to the caller's own account.
 GRANT SELECT, INSERT ON ops.audit_event TO tether_records;
 
@@ -132,7 +148,7 @@ GRANT SELECT, INSERT ON ops.audit_event TO tether_records;
 
 GRANT USAGE ON SCHEMA programme, record, care, ops TO tether_care_team;
 
--- postgres-store.ts:168,202. `consent_text` and `owner_account_id` are not
+-- care-team-service/src/postgres-store.ts:194,230. `consent_text` and `owner_account_id` are not
 -- granted: the clinician surface never shows the patient's wording, and the
 -- owner column is the policy's, not the service's. (A table's own policies
 -- may reference columns the caller cannot select; it is the *other* tables a
@@ -141,32 +157,33 @@ GRANT SELECT (id, enrolment_id, scope, recipient_kind, recipient_id,
               consent_version, granted_at, revoked_at)
   ON programme.sharing_consent TO tether_care_team;
 
--- postgres-store.ts:165,234,260. `account_id` is selected for the audit row
+-- postgres-store.ts:191,260,285. `account_id` is selected for the audit row
 -- only (store.ts EnrolmentSummary.subjectAccountId).
 GRANT SELECT (id, account_id, area_id, status, joined_on)
   ON programme.enrolment TO tether_care_team;
 
--- postgres-store.ts:262,379 (notes), :264.
+-- postgres-store.ts:288,290 (counts), :407 (notes).
 GRANT SELECT (id, enrolment_id, screen_id, block_index, kind, value, answered_at)
   ON record.screen_answer TO tether_care_team;
--- postgres-store.ts:266-270,286 count and date only. The free-text columns are
--- reachable through care.lapse_details(), which checks for a `notes` consent.
+-- postgres-store.ts:292-296,312 count and date only. The free-text columns are
+-- reachable through care.lapse_details() (:435), which checks for a `notes`
+-- consent.
 GRANT SELECT (id, enrolment_id, occurred_at) ON record.lapse_event TO tether_care_team;
--- postgres-store.ts:272,325,338,427.
+-- postgres-store.ts:298-300,351,365,457.
 GRANT SELECT (id, enrolment_id, measure_id, value_num, value_text, unit, observed_at, source, platform)
   ON record.observation TO tether_care_team;
 
 GRANT EXECUTE ON FUNCTION care.lapse_details(uuid) TO tether_care_team;
 
--- postgres-store.ts:448 SELECT. Routing is read-only here by design (0005).
+-- postgres-store.ts:480 SELECT. Routing is read-only here by design (0005).
 GRANT SELECT ON care.escalation_policy TO tether_care_team;
--- postgres-store.ts:460 INSERT; :490 SELECT. No UPDATE and no DELETE.
+-- postgres-store.ts:496 INSERT; :531 SELECT. No UPDATE and no DELETE.
 GRANT SELECT ON care.escalation TO tether_care_team;
 GRANT INSERT (enrolment_id, raised_by, consent_id, signal, detail,
               policy_area_id, policy_version, routed_to_kind, routed_to, acknowledge_by)
   ON care.escalation TO tether_care_team;
 
--- audit.ts:57 INSERT.
+-- care-team-service/src/audit.ts:62 INSERT.
 GRANT INSERT ON ops.audit_event TO tether_care_team;
 
 -- ---------------------------------------------------------------------------
@@ -175,7 +192,8 @@ GRANT INSERT ON ops.audit_event TO tether_care_team;
 
 GRANT USAGE ON SCHEMA ops TO tether_notification;
 
--- store.ts:37 INSERT … ON CONFLICT (token) DO UPDATE; :68,102 DELETE; :80 SELECT.
+-- notification-service/src/store.ts:45 INSERT … ON CONFLICT (token) DO UPDATE;
+-- :76,110 DELETE; :88 SELECT.
 GRANT SELECT, DELETE ON ops.device_token TO tether_notification;
 GRANT INSERT (account_id, token, platform, area_id) ON ops.device_token TO tether_notification;
 GRANT UPDATE (account_id, platform, area_id, last_seen_at) ON ops.device_token TO tether_notification;
@@ -184,14 +202,14 @@ GRANT UPDATE (account_id, platform, area_id, last_seen_at) ON ops.device_token T
 -- token presented by a new account leaves the old one (see 0010, section 6).
 GRANT EXECUTE ON FUNCTION ops.release_device_token(text) TO tether_notification;
 
--- store.ts:127 SELECT; :159 INSERT … ON CONFLICT (account_id) DO UPDATE.
+-- store.ts:135 SELECT; :167 INSERT … ON CONFLICT (account_id) DO UPDATE.
 GRANT SELECT ON ops.notification_preference TO tether_notification;
 GRANT INSERT (account_id, specific_content, opted_in_at, consent_text)
   ON ops.notification_preference TO tether_notification;
 GRANT UPDATE (specific_content, opted_in_at, consent_text)
   ON ops.notification_preference TO tether_notification;
 
--- store.ts:187 INSERT only. The log is append-only and holds no message body.
+-- store.ts:195 INSERT only. The log is append-only and holds no message body.
 GRANT INSERT (account_id, kind, variant, device_count, delivered_count, failed_count, provider)
   ON ops.notification_log TO tether_notification;
 
@@ -201,7 +219,8 @@ GRANT INSERT (account_id, kind, variant, device_count, delivered_count, failed_c
 
 GRANT USAGE ON SCHEMA ops TO tether_website;
 
--- waitlist.ts:46 SELECT (dedupe window); :53 INSERT; :95 DELETE; :125 purge.
+-- website-service/src/waitlist.ts:46 SELECT (dedupe window); :53 INSERT; :95
+-- DELETE; :124-126 purge.
 GRANT SELECT (id, email, received_at, purge_after) ON ops.waitlist_enquiry TO tether_website;
 GRANT INSERT (name, email, role, interest, message, source) ON ops.waitlist_enquiry TO tether_website;
 GRANT DELETE ON ops.waitlist_enquiry TO tether_website;
@@ -215,23 +234,24 @@ GRANT INSERT ON ops.audit_event TO tether_website;
 
 GRANT USAGE ON SCHEMA chronic TO tether_chronic;
 
--- store.ts:93,124 SELECT; :118 INSERT … ON CONFLICT DO NOTHING; :159 UPDATE.
+-- chronic-service/src/store.ts:96,127 SELECT; :121 INSERT … ON CONFLICT DO NOTHING;
+-- :162 UPDATE.
 GRANT SELECT ON chronic.profile TO tether_chronic;
 GRANT INSERT (account_id) ON chronic.profile TO tether_chronic;
 GRANT UPDATE (display_name, avatar_emoji, dob, health_score) ON chronic.profile TO tether_chronic;
 
--- store.ts:232,296 SELECT; :259 INSERT … ON CONFLICT (profile_id, kind) DO UPDATE.
+-- store.ts:236,301 SELECT; :262 INSERT … ON CONFLICT (profile_id, kind) DO UPDATE.
 GRANT SELECT ON chronic.condition TO tether_chronic;
 GRANT INSERT (profile_id, kind, status, goal_value, goal_unit, diagnosed_at)
   ON chronic.condition TO tether_chronic;
 GRANT UPDATE (status, goal_value, goal_unit, diagnosed_at) ON chronic.condition TO tether_chronic;
 
--- store.ts:352 SELECT; :369 INSERT. Readings are immutable.
+-- store.ts:361 SELECT; :386 INSERT. Readings are immutable.
 GRANT SELECT ON chronic.vital_entry TO tether_chronic;
 GRANT INSERT (condition_id, metric_key, label, value, unit, note, observed_at, source)
   ON chronic.vital_entry TO tether_chronic;
 
--- store.ts:456 SELECT; :486 INSERT; :522 DELETE. There is no UPDATE route.
+-- store.ts:477 SELECT; :507 INSERT; :556 DELETE. There is no UPDATE route.
 GRANT SELECT, DELETE ON chronic.medication TO tether_chronic;
 GRANT INSERT (profile_id, condition_id, name, dosage, schedule, times,
               reminders_enabled, last_taken_at, active)
@@ -243,7 +263,7 @@ GRANT INSERT (profile_id, condition_id, name, dosage, schedule, times,
 
 GRANT USAGE ON SCHEMA programme TO tether_realtime;
 
--- allowlist.ts: the enrolments the caller owns, and the ones a live consent
+-- realtime-service/src/allowlist.ts:29,34: the enrolments the caller owns, and the ones a live consent
 -- names them as recipient of. Ids and ownership only: the service never reads a
 -- row's contents, which is the whole design of the stream (0008).
 GRANT SELECT (id, account_id) ON programme.enrolment TO tether_realtime;
