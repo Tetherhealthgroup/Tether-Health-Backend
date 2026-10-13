@@ -59,7 +59,7 @@ async function signerFixture() {
   };
 }
 
-test('the environment accepts a PEM written on one line', () => {
+void test('the environment accepts a PEM written on one line', () => {
   const { privatePem, publicPem } = keyPair();
 
   // Compose files, CI secrets and systemd units all hand over single-line
@@ -78,7 +78,7 @@ test('the environment accepts a PEM written on one line', () => {
   assert.equal(config.REFRESH_TOKEN_TTL_DAYS, 30);
 });
 
-test('a key that is not a PEM block fails at boot, not at first sign-in', () => {
+void test('a key that is not a PEM block fails at boot, not at first sign-in', () => {
   assert.throws(() =>
     authSchema.parse({
       SUPABASE_JWKS_URL: 'https://project.supabase.co/auth/v1/.well-known/jwks.json',
@@ -89,7 +89,7 @@ test('a key that is not a PEM block fails at boot, not at first sign-in', () => 
   );
 });
 
-test('an access token verifies through the published JWKS', async (t) => {
+void test('an access token verifies through the published JWKS', async (t) => {
   const { signer, jwksUrl, close } = await signerFixture();
   t.after(close);
 
@@ -114,7 +114,7 @@ test('an access token verifies through the published JWKS', async (t) => {
   assert.equal(issued.expiresInSeconds, 900);
 });
 
-test('the JWKS publishes the public half, under the kid the header names', async (t) => {
+void test('the JWKS publishes the public half, under the kid the header names', async (t) => {
   const { signer, jwksUrl, close } = await signerFixture();
   t.after(close);
 
@@ -144,7 +144,7 @@ test('the JWKS publishes the public half, under the kid the header names', async
   assert.equal(header.alg, 'RS256');
 });
 
-test('a correctly-signed token for another audience is refused', async (t) => {
+void test('a correctly-signed token for another audience is refused', async (t) => {
   const { signer, jwksUrl, close } = await signerFixture();
   t.after(close);
 
@@ -162,7 +162,7 @@ test('a correctly-signed token for another audience is refused', async (t) => {
   await assert.rejects(() => verify(issued.token));
 });
 
-test('a token signed by a different key pair is refused', async (t) => {
+void test('a token signed by a different key pair is refused', async (t) => {
   const { jwksUrl, close } = await signerFixture();
   t.after(close);
 
@@ -187,7 +187,7 @@ test('a token signed by a different key pair is refused', async (t) => {
   await assert.rejects(() => verify(forged.token));
 });
 
-test('an expired token is refused once the clock tolerance is past', async (t) => {
+void test('an expired token is refused once the clock tolerance is past', async (t) => {
   const { signer, jwksUrl, close } = await signerFixture();
   t.after(close);
 

@@ -55,7 +55,14 @@ const LIMITS = {
 function looseText(max: number) {
   return z.preprocess((value) => {
     if (value === undefined || value === null) return '';
-    const text = typeof value === 'string' ? value : String(value);
+    // An object has no sensible text form: `String({})` is the literal
+    // `[object Object]`, which would be stored as the visitor's answer.
+    const text =
+      typeof value === 'string'
+        ? value
+        : typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
+          ? String(value)
+          : '';
     return text.trim().slice(0, max);
   }, z.string());
 }

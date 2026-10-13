@@ -40,11 +40,11 @@ const files = readdirSync(MIGRATIONS)
 const read = (name: string): string =>
   readFileSync(path.join(MIGRATIONS, name), 'utf8');
 
-test('there are migrations to check', () => {
+void test('there are migrations to check', () => {
   assert.ok(files.length > 0, 'no .sql files found');
 });
 
-test('no migration manages its own transaction', () => {
+void test('no migration manages its own transaction', () => {
   // The Supabase CLI wraps each file in a transaction together with its
   // ledger row. A `COMMIT` inside a file ends that transaction early and the
   // ledger insert then commits separately — a failure in the gap leaves a
@@ -72,7 +72,7 @@ test('no migration manages its own transaction', () => {
   );
 });
 
-test('filenames sort into apply order', () => {
+void test('filenames sort into apply order', () => {
   // Supabase records the leading 14-digit UTC timestamp as the migration
   // version in `supabase_migrations.schema_migrations`, and applies files in
   // lexical order — so the prefix is what decides apply order, not a comment.
@@ -81,7 +81,7 @@ test('filenames sort into apply order', () => {
   assert.deepEqual(malformed, [], 'expected YYYYMMDDHHmmss_snake_case.sql');
 });
 
-test('no two migrations share a version', () => {
+void test('no two migrations share a version', () => {
   // Two branches generating a migration in the same second. Supabase keys its
   // ledger on the version, so a collision means one of the two is recorded as
   // applied when it never ran.
@@ -98,7 +98,7 @@ test('no two migrations share a version', () => {
   assert.deepEqual(collisions, []);
 });
 
-test('every extension a migration relies on is created', () => {
+void test('every extension a migration relies on is created', () => {
   // `citext` was used for two email columns with no `CREATE EXTENSION`, so the
   // first migration would have failed on the first clean database it met.
   // `gen_random_uuid()` needs no extension on PostgreSQL 13+ and is therefore
@@ -113,7 +113,7 @@ test('every extension a migration relies on is created', () => {
   }
 });
 
-test('every table holding patient data has RLS enabled and forced', () => {
+void test('every table holding patient data has RLS enabled and forced', () => {
   // ENABLE alone is not enough: without FORCE the owning role bypasses every
   // policy, and the owner is what migrations and maintenance scripts connect
   // as. The model repo enabled RLS on one table, attached no policy to it, and
@@ -148,7 +148,7 @@ test('every table holding patient data has RLS enabled and forced', () => {
   }
 });
 
-test('no PHI table carries a soft-delete column', () => {
+void test('no PHI table carries a soft-delete column', () => {
   // `export_and_delete` asks that deletion be "completed rather than hidden".
   // A `deleted_at` on a health row is precisely the hidden kind.
   const record = files

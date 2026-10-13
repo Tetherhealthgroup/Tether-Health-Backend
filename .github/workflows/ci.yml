@@ -13,9 +13,11 @@
 # invisible. A schema change reached patient data before anybody had read the
 # diff.
 #
-# The `migrate` job below applies every migration to a throwaway postgres
-# service container, twice, and then proves the runner refuses an edited
-# migration. That is the check. Promoting a green check to production is a
+# The `migrate` job below starts the Supabase CLI's LOCAL stack inside the
+# runner (Docker containers that exist only for the life of the job) and has
+# `supabase db reset` apply every file in `supabase/migrations/` to it from
+# scratch. It never links a project, never holds an access token and never
+# touches a hosted database. Promoting a green check to production is a
 # separate, human decision, and this file is not where it gets made.
 #
 # ---------------------------------------------------------------------------
@@ -132,91 +134,38 @@ jobs:
           # trips a rule, fix the file rather than the allowlist.
 
   # -------------------------------------------------------------------------
-  # migrate — the schema, applied for real
+  # migrate — the schema, applied for real, to a LOCAL Supabase stack
   # -------------------------------------------------------------------------
+  #
+  # `supabase db reset` drops and recreates the local database and applies
+  # `supabase/migrations/*.sql` in order, so a migration that does not apply
+  # cleanly from an empty database fails this job. The file-level guards the
+  # custom migration runner enforced (no BEGIN/COMMIT, ordering, and so on)
+  # live in `db/test/migrations.test.ts`, which the `check` job runs.
   migrate:
-    name: Migrations against postgres:16
+    name: Migrations against a local Supabase stack
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: tether
-          POSTGRES_PASSWORD: ci_only_not_a_secret
-          POSTGRES_DB: tether
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U tether -d tether"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+    timeout-minutes: 20
 
     env:
-      MIGRATION_DATABASE_URL: postgres://tether:ci_only_not_a_secret@localhost:5432/tether
-      PGPASSWORD: ci_only_not_a_secret
+      # The CLI's documented local-stack default (port 54322 in
+      # supabase/config.toml). It exists only inside this runner.
+      LOCAL_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: supabase/setup-cli@v1
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          version: latest
 
-      - name: Install
-        run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+      # Starts the local containers only. No `supabase link`, no login and no
+      # access token: nothing in this job can reach a hosted project.
+      - name: Start local stack
+        run: supabase start
 
-      # No `CREATE EXTENSION` step: `0001_foundation.sql` creates `citext`
-      # itself, and `gen_random_uuid()` needs no extension on PostgreSQL 13+.
-      # The migration role here is the superuser the service container starts
-      # with, which is what `CREATE EXTENSION` requires; in a managed
-      # environment it is the provisioning step's job, not a service role's.
-      - name: Apply migrations
-        run: node --experimental-strip-types db/migrate.ts
-
-      # Twice. A migration runner that is not idempotent is one that re-runs
-      # from the top after any failure, which is the exact defect the single
-      # ledger exists to prevent. The second run must find nothing to do.
-      - name: Re-run — must be a no-op
-        run: |
-          output=$(node --experimental-strip-types db/migrate.ts)
-          echo "$output"
-          echo "$output" | grep -q 'Nothing to do' \
-            || { echo "::error::The second run was not a no-op. The ledger is not recording what it applied."; exit 1; }
-
-      - name: Verify checksums
-        run: node --experimental-strip-types db/migrate.ts --verify-only
-
-      # The property the runner exists for: a committed migration that has been
-      # edited is a hard stop, not a warning and not a silent re-apply.
-      - name: An edited migration must fail the run
-        run: |
-          echo "-- CI drift probe" >> db/migrations/0001_foundation.sql
-          if node --experimental-strip-types db/migrate.ts; then
-            echo "::error::An edited migration was accepted. The checksum check is not working."
-            git checkout -- db/migrations/0001_foundation.sql
-            exit 1
-          fi
-          echo "Refused, as it should be."
-          git checkout -- db/migrations/0001_foundation.sql
-
-      # `0001_foundation.sql` states the rule — no BEGIN/COMMIT in a migration,
-      # because the runner wraps each file together with its ledger row — and
-      # says the runner enforces it. This is the step that keeps that sentence
-      # true. Postgres only *warns* on a nested BEGIN, so nothing else would.
-      - name: A migration with transaction control must fail the run
-        run: |
-          printf 'BEGIN;\nCREATE TABLE ops.ci_probe(id int);\nCOMMIT;\n' > db/migrations/0099_ci_probe.sql
-          if node --experimental-strip-types db/migrate.ts; then
-            echo "::error::A migration containing BEGIN/COMMIT was accepted."
-            rm -f db/migrations/0099_ci_probe.sql
-            exit 1
-          fi
-          echo "Refused, as it should be."
-          rm -f db/migrations/0099_ci_probe.sql
+      - name: Apply migrations from scratch
+        run: supabase db reset
 
       # ARCHITECTURE.md: "RLS is FORCE, and a migration test fails if a PHI
       # table lacks a policy." The model repo wrote its RLS behind
@@ -224,7 +173,7 @@ jobs:
       # success — so its policies were decorative and nothing noticed.
       - name: Every PHI table has RLS enabled, forced, and a policy
         run: |
-          psql "$MIGRATION_DATABASE_URL" -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align <<'SQL' > /tmp/rls.txt
+          psql "$LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 --quiet --tuples-only --no-align <<'SQL' > /tmp/rls.txt
           SELECT n.nspname || '.' || c.relname
                  || CASE WHEN NOT c.relrowsecurity     THEN ' [rls not enabled]' ELSE '' END
                  || CASE WHEN NOT c.relforcerowsecurity THEN ' [rls not forced]'  ELSE '' END
@@ -252,7 +201,7 @@ jobs:
       # `select(Profile).order_by(created_at).limit(1)` unrepresentable.
       - name: chronic.profile.account_id is not optional
         run: |
-          nullable=$(psql "$MIGRATION_DATABASE_URL" --quiet --tuples-only --no-align \
+          nullable=$(psql "$LOCAL_DATABASE_URL" --quiet --tuples-only --no-align \
             -c "SELECT is_nullable FROM information_schema.columns
                  WHERE table_schema = 'chronic' AND table_name = 'profile'
                    AND column_name = 'account_id';")
@@ -264,7 +213,7 @@ jobs:
       # The delivery log must have nowhere to put a notification body.
       - name: ops.notification_log holds no message content
         run: |
-          leaky=$(psql "$MIGRATION_DATABASE_URL" --quiet --tuples-only --no-align \
+          leaky=$(psql "$LOCAL_DATABASE_URL" --quiet --tuples-only --no-align \
             -c "SELECT string_agg(column_name, ', ') FROM information_schema.columns
                  WHERE table_schema = 'ops' AND table_name = 'notification_log'
                    AND column_name IN ('body','title','payload','message','content');")
@@ -272,6 +221,10 @@ jobs:
             echo "::error::ops.notification_log has content columns ($leaky). sensitive_notifications_off depends on there being nowhere to write the text."
             exit 1
           fi
+
+      - name: Stop local stack
+        if: always()
+        run: supabase stop --no-backup
 
   # -------------------------------------------------------------------------
   # images — every service actually builds
@@ -282,7 +235,7 @@ jobs:
     timeout-minutes: 20
 
     strategy:
-      # One broken Dockerfile should not hide the state of the other eight.
+      # One broken Dockerfile should not hide the state of the others.
       fail-fast: false
       matrix:
         service:
@@ -295,6 +248,7 @@ jobs:
           - notification-service
           - website-service
           - chronic-service
+          - realtime-service
 
     steps:
       - uses: actions/checkout@v4

@@ -12,7 +12,11 @@ import {
   type Logger,
   type Verifier,
 } from '@tether/core';
-import { decodeScreenAnswers, encodeScreenAnswers } from './answers.ts';
+import {
+  decodeScreenAnswers,
+  encodeScreenAnswers,
+  type EncodedScreenAnswers,
+} from './answers.ts';
 import { writeAudit } from './audit.ts';
 import {
   exportQuerySchema,
@@ -156,7 +160,7 @@ export function createRecordsApp(deps: RecordsDeps): Express {
     handler(async (req, res) => {
       const areaId = pathId(req, 'areaId');
       const screenId = pathId(req, 'screenId');
-      const blocks = decodeScreenAnswers(req.body);
+      const blocks = decodeScreenAnswers(req.body as EncodedScreenAnswers);
       const principal = principalOf(req);
 
       const result = await withEnrolment(req, areaId, async (ctx, enrolment) => {

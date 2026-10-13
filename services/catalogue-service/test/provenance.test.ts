@@ -64,7 +64,7 @@ const SUPPLEMENT_ARCHETYPE_ROW = {
   provenance: 'supplement' as const,
 };
 
-test('an unreviewed archetype maps to a payload that still says so', () => {
+void test('an unreviewed archetype maps to a payload that still says so', () => {
   const mapped = toArchetype(SUPPLEMENT_ARCHETYPE_ROW);
 
   assert.equal(mapped.provenance, 'supplement');
@@ -74,7 +74,7 @@ test('an unreviewed archetype maps to a payload that still says so', () => {
   assert.equal(ArchetypeSchema.parse(mapped).provenance, 'supplement');
 });
 
-test('an unreviewed content screen maps to a payload that still says so', () => {
+void test('an unreviewed content screen maps to a payload that still says so', () => {
   const mapped = toScreenContent({
     productId: 'lookup',
     screenId: 'S24',
@@ -88,7 +88,7 @@ test('an unreviewed content screen maps to a payload that still says so', () => 
   assert.equal(mapped.updatedAt, '2026-09-12T10:00:00.000Z');
 });
 
-test('GET /archetypes carries provenance for every archetype', async () => {
+void test('GET /archetypes carries provenance for every archetype', async () => {
   const tx = stubTransaction([
     [/FROM catalogue\.archetype/, [BUNDLE_ARCHETYPE_ROW, SUPPLEMENT_ARCHETYPE_ROW]],
   ]);
@@ -105,7 +105,7 @@ test('GET /archetypes carries provenance for every archetype', async () => {
   );
 });
 
-test('a content pack returns supplement screens alongside bundle ones, each marked', async () => {
+void test('a content pack returns supplement screens alongside bundle ones, each marked', async () => {
   const tx = stubTransaction([
     [
       /FROM catalogue\.screen_content/,

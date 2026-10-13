@@ -59,7 +59,7 @@ function consent(overrides: Partial<SharingConsent>): SharingConsent {
   };
 }
 
-test('a revoked consent disappears from the preview immediately', () => {
+void test('a revoked consent disappears from the preview immediately', () => {
   const live = consent({ id: '11111111-1111-4111-8111-111111111111' });
   const revoked = consent({
     id: '33333333-3333-4333-8333-333333333333',
@@ -90,7 +90,7 @@ test('a revoked consent disappears from the preview immediately', () => {
   assert.equal(liveConsents([live, revoked]).length, 1);
 });
 
-test('revoking the last consent empties the preview rather than falling back to a default', () => {
+void test('revoking the last consent empties the preview rather than falling back to a default', () => {
   const entries = previewEntries({
     consents: [consent({ revokedAt: '2026-02-02T12:00:00.000Z' })],
     prospective: null,
@@ -100,7 +100,7 @@ test('revoking the last consent empties the preview rather than falling back to 
   assert.deepEqual(entries, []);
 });
 
-test('the smaller scope discloses no notes, and says so with null rather than []', () => {
+void test('the smaller scope discloses no notes, and says so with null rather than []', () => {
   const totalsOnly = projectShare('totals_and_adherence', SOURCE);
 
   // null renders as "this recipient would receive none of your own words".
@@ -113,7 +113,7 @@ test('the smaller scope discloses no notes, and says so with null rather than []
   assert.equal(totalsOnly.totals.length, 1);
 });
 
-test('the notes scope is a different disclosure, not a bigger one', () => {
+void test('the notes scope is a different disclosure, not a bigger one', () => {
   const notes = projectShare('notes', SOURCE);
 
   assert.equal(notes.notes?.length, 1);
@@ -131,7 +131,7 @@ function totalsOf(source: PreviewSource) {
   return [...source.totals];
 }
 
-test('a prospective preview shows what a grant would send, before it is made', () => {
+void test('a prospective preview shows what a grant would send, before it is made', () => {
   const entries = previewEntries({
     consents: [],
     prospective: { scope: 'notes', recipientKind: 'care_team' },
@@ -144,7 +144,7 @@ test('a prospective preview shows what a grant would send, before it is made', (
   assert.equal(entries[0]?.payload.notes?.length, 1);
 });
 
-test('the preview response parses against the published contract, and says nothing was sent', () => {
+void test('the preview response parses against the published contract, and says nothing was sent', () => {
   const response = SharePreviewResponseSchema.parse({
     areaId: 'tobacco',
     generatedAt: '2026-02-02T12:00:00.000Z',

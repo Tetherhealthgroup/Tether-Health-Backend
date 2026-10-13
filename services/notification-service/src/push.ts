@@ -126,7 +126,7 @@ export async function createPusher(options: PusherOptions): Promise<Pusher> {
       'FIREBASE_SERVICE_ACCOUNT_JSON is not set: push delivery is disabled. ' +
         'Device registration, preferences and the delivery log all still work.',
     );
-    return { enabled: false, send: async () => DISABLED_OUTCOME };
+    return { enabled: false, send: () => Promise.resolve(DISABLED_OUTCOME) };
   }
 
   try {
@@ -249,6 +249,6 @@ export async function createPusher(options: PusherOptions): Promise<Pusher> {
       { err: error, provider: 'disabled' },
       'firebase-admin failed to initialise; continuing with push disabled',
     );
-    return { enabled: false, send: async () => DISABLED_OUTCOME };
+    return { enabled: false, send: () => Promise.resolve(DISABLED_OUTCOME) };
   }
 }

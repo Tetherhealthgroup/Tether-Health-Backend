@@ -36,7 +36,7 @@ const event = (over: Partial<ChangeNotification> = {}): ChangeNotification => ({
   ...over,
 });
 
-test('a notification carries no row data', () => {
+void test('a notification carries no row data', () => {
   // The security property the whole design rests on. If a payload ever grows a
   // value column, a stream becomes a read path with no consent check in it.
   const parsed = changeNotification.parse({
@@ -54,18 +54,18 @@ test('a notification carries no row data', () => {
   ]);
 });
 
-test('a subscriber hears about its own enrolments', () => {
+void test('a subscriber hears about its own enrolments', () => {
   assert.equal(shouldDeliver(subscriber([MINE]), event()), true);
 });
 
-test('a subscriber hears nothing about anyone else', () => {
+void test('a subscriber hears nothing about anyone else', () => {
   assert.equal(
     shouldDeliver(subscriber([MINE]), event({ enrolmentId: THEIRS })),
     false,
   );
 });
 
-test('a revocation still reaches a subscriber who just lost access', () => {
+void test('a revocation still reaches a subscriber who just lost access', () => {
   // The case that has to be special. A clinician's allow-list was resolved at
   // connect; when consent is revoked the enrolment leaves it, and a plain
   // "not yours" rule would drop the very event telling them to close the view.
@@ -80,7 +80,7 @@ test('a revocation still reaches a subscriber who just lost access', () => {
   assert.equal(shouldDeliver(subscriber([MINE]), revocation), true);
 });
 
-test('a consent *grant* for someone else is not leaked', () => {
+void test('a consent *grant* for someone else is not leaked', () => {
   // The mirror of the above, and the thing a careless fix would get wrong:
   // only revocation is exempt. Learning that a stranger granted consent to
   // somebody is itself a disclosure.
@@ -94,7 +94,7 @@ test('a consent *grant* for someone else is not leaked', () => {
   assert.equal(shouldDeliver(subscriber([MINE]), grant), false);
 });
 
-test('fan-out delivers only to the entitled', () => {
+void test('fan-out delivers only to the entitled', () => {
   const mineSink: ChangeNotification[] = [];
   const theirsSink: ChangeNotification[] = [];
 
@@ -107,7 +107,7 @@ test('fan-out delivers only to the entitled', () => {
   assert.equal(theirsSink.length, 0);
 });
 
-test('fan-out reports sockets that have gone', () => {
+void test('fan-out reports sockets that have gone', () => {
   const dead = subscriber([MINE], [], false);
   const alive = subscriber([MINE]);
 
@@ -116,7 +116,7 @@ test('fan-out reports sockets that have gone', () => {
   assert.deepEqual(gone, [dead]);
 });
 
-test('an SSE frame is terminated', () => {
+void test('an SSE frame is terminated', () => {
   // A frame without the blank line is the classic reason a stream appears to
   // hang: the client holds it, waiting for an end that never comes.
   const frame = toSseFrame(event());
@@ -129,7 +129,7 @@ test('an SSE frame is terminated', () => {
   assert.deepEqual(JSON.parse(data ?? '{}'), event());
 });
 
-test('the frame is one line of data', () => {
+void test('the frame is one line of data', () => {
   // SSE splits on newlines, so an embedded one would truncate the event. The
   // payload is JSON with no raw newlines, which is what keeps that safe.
   const frame = toSseFrame(event());

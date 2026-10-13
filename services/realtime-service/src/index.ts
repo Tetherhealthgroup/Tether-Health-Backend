@@ -202,9 +202,9 @@ start({
   serviceName: config.SERVICE_NAME,
   logger,
   onShutdown: async () => {
-    // Close the streams before the pool: a subscriber mid-write against a
-    // closed pool would throw on the way out of the process.
-    for (const subscriber of subscribers) subscriber.send.length;
+    // Forget the subscribers; `start`'s drain window ends the sockets. There
+    // used to be a `subscriber.send.length` statement here that read as though
+    // it closed each stream and did nothing. `Subscriber` has no close hook.
     subscribers.clear();
     await listener.end().catch(() => undefined);
     await db.close();

@@ -36,7 +36,7 @@ async function seeded() {
   return harness;
 }
 
-test('the export nests answers inside their programme, with no flat top-level map', async (t) => {
+void test('the export nests answers inside their programme, with no flat top-level map', async (t) => {
   const harness = await seeded();
   t.after(() => harness.close());
 
@@ -63,7 +63,7 @@ test('the export nests answers inside their programme, with no flat top-level ma
   assert.equal(digital.observations[0].selfReported, false);
 });
 
-test('the export reports sharing from live consent, not a stored boolean', async (t) => {
+void test('the export reports sharing from live consent, not a stored boolean', async (t) => {
   const harness = await seeded();
   t.after(() => harness.close());
 
@@ -82,7 +82,7 @@ test('the export reports sharing from live consent, not a stored boolean', async
   assert.equal(after.sharing.notes, false);
 });
 
-test('an export is audited, and the audit row carries no content', async (t) => {
+void test('an export is audited, and the audit row carries no content', async (t) => {
   const harness = await seeded();
   t.after(() => harness.close());
 
@@ -99,7 +99,7 @@ test('an export is audited, and the audit row carries no content', async (t) => 
   });
 });
 
-test('deletion is audited before it happens, and completes', async (t) => {
+void test('deletion is audited before it happens, and completes', async (t) => {
   const harness = await seeded();
   t.after(() => harness.close());
 
@@ -131,7 +131,7 @@ test('deletion is audited before it happens, and completes', async (t) => {
   assert.deepEqual(intent.detail, { areas: ['behavioral', 'digital'] });
 });
 
-test('deleting one account\'s record leaves another account\'s alone', async (t) => {
+void test('deleting one account\'s record leaves another account\'s alone', async (t) => {
   const harness = await seeded();
   t.after(() => harness.close());
   harness.world.enrol('account-b', 'tobacco');
@@ -147,7 +147,7 @@ test('deleting one account\'s record leaves another account\'s alone', async (t)
   assert.equal(kept.body.answers.S13.slider['0'], 44);
 });
 
-test('readiness is a real check, not a constant', async (t) => {
+void test('readiness is a real check, not a constant', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
 

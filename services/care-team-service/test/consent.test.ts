@@ -15,7 +15,7 @@ import { keysIn, startHarness } from './support/harness.ts';
 const CLINICIAN = 'clinician:11111111-1111-4111-8111-111111111111';
 const CLINICIAN_ID = '11111111-1111-4111-8111-111111111111';
 
-test('the patient list is derived from live consent, and a revocation removes it', async (t) => {
+void test('the patient list is derived from live consent, and a revocation removes it', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -39,7 +39,7 @@ test('the patient list is derived from live consent, and a revocation removes it
   assert.deepEqual(afterRevocation.body.programmes, []);
 });
 
-test('a revoked consent refuses the read immediately, with 403 consent-required', async (t) => {
+void test('a revoked consent refuses the read immediately, with 403 consent-required', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -59,7 +59,7 @@ test('a revoked consent refuses the read immediately, with 403 consent-required'
   assert.doesNotMatch(JSON.stringify(refused.body), /bad week/);
 });
 
-test('a refused read is still audited — the attempt is the thing to record', async (t) => {
+void test('a refused read is still audited — the attempt is the thing to record', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -80,7 +80,7 @@ test('a refused read is still audited — the attempt is the thing to record', a
   });
 });
 
-test('a served read names the enrolment, the scope and the consent id', async (t) => {
+void test('a served read names the enrolment, the scope and the consent id', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -99,7 +99,7 @@ test('a served read names the enrolment, the scope and the consent id', async (t
   assert.equal(event.detail.actorAccountId, CLINICIAN_ID);
 });
 
-test('a totals_and_adherence consent does not leak notes', async (t) => {
+void test('a totals_and_adherence consent does not leak notes', async (t) => {
   // "A coach seeing a total is a different disclosure from a coach reading a
   // note." Both layers are asserted here: the view never asks for text, and the
   // store returns none if it does.
@@ -160,7 +160,7 @@ test('a totals_and_adherence consent does not leak notes', async (t) => {
   assert.equal(response.body.adherence.blocksAnswered, 1);
 });
 
-test('a notes consent includes the free text, and says what it was served under', async (t) => {
+void test('a notes consent includes the free text, and says what it was served under', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -183,7 +183,7 @@ test('a notes consent includes the free text, and says what it was served under'
   });
 });
 
-test('a clinician consented to one programme cannot read another', async (t) => {
+void test('a clinician consented to one programme cannot read another', async (t) => {
   // The same patient, two programmes, one consent. The second must be as
   // unreachable as a stranger's — `per_program_sharing` is about the programme,
   // not the person, and 42 CFR Part 2 makes that non-negotiable for
@@ -211,7 +211,7 @@ test('a clinician consented to one programme cannot read another', async (t) => 
   assert.equal(listed.body.programmes[0].areaId, 'behavioral');
 });
 
-test('another clinician\'s consent is not this clinician\'s', async (t) => {
+void test('another clinician\'s consent is not this clinician\'s', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -221,7 +221,7 @@ test('another clinician\'s consent is not this clinician\'s', async (t) => {
   assert.equal(response.status, 403);
 });
 
-test('no response carries a risk score, a grade or an interpretation', async (t) => {
+void test('no response carries a risk score, a grade or an interpretation', async (t) => {
   // `no_risk_score`, `no_result_interpretation`, `never_diagnose`. This service
   // returns values and trends; a clinician is what interprets them.
   const harness = await startHarness();
@@ -266,7 +266,7 @@ test('no response carries a risk score, a grade or an interpretation', async (t)
   assert.equal(view.body.measures[0].latestValue, 19);
 });
 
-test('a caller without the clinician role gets nothing', async (t) => {
+void test('a caller without the clinician role gets nothing', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -285,7 +285,7 @@ test('a caller without the clinician role gets nothing', async (t) => {
   assert.equal(harness.world.audit.length, 0);
 });
 
-test('readiness is a real check', async (t) => {
+void test('readiness is a real check', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
 

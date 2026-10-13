@@ -11,7 +11,7 @@ import { problem, ProblemError, ProblemType, setProblemBase } from '../src/error
  * serialised it.
  */
 
-test('context stays out of the body', () => {
+void test('context stays out of the body', () => {
   const error = new ProblemError(ProblemType.internal, 500, 'nope', {
     context: { query: 'SELECT * FROM record.observation', accountId: 'abc' },
   });
@@ -22,7 +22,7 @@ test('context stays out of the body', () => {
   assert.equal(body.detail, 'nope');
 });
 
-test('extensions are serialised', () => {
+void test('extensions are serialised', () => {
   const error = problem.atProgrammeCeiling('tobacco');
   const body = error.toBody('req-2', '/v1/enrolments');
 
@@ -32,7 +32,7 @@ test('extensions are serialised', () => {
   assert.equal(body.title, ProblemType.atProgrammeCeiling);
 });
 
-test('an extension cannot overwrite a reserved member', () => {
+void test('an extension cannot overwrite a reserved member', () => {
   // An `extensions.status` of 200 on a 409 would be worse than no extension at
   // all, so reserved fields are written after the spread.
   const error = new ProblemError(ProblemType.conflict, 409, 'clash', {
@@ -45,13 +45,13 @@ test('an extension cannot overwrite a reserved member', () => {
   assert.match(String(body.type), /conflict$/);
 });
 
-test('the type URI resolves under the configured base', () => {
+void test('the type URI resolves under the configured base', () => {
   setProblemBase('https://api.example.test/problems/');
   const body = problem.notFound('gone').toBody();
   assert.equal(body.type, 'https://api.example.test/problems/not-found');
 });
 
-test('validation errors list every failing field at once', () => {
+void test('validation errors list every failing field at once', () => {
   // One redeploy per missing field is its own kind of outage.
   const body = problem
     .validation('bad', [

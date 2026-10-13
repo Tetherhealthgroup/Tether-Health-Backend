@@ -26,7 +26,7 @@ function txReturning(row: unknown): Transaction {
   } as unknown as Transaction;
 }
 
-test('with no grant the payload is generic', () => {
+void test('with no grant the payload is generic', () => {
   const result = render('medication_reminder', ACCOUNT, null, {
     name: 'Naltrexone',
     dosage: '50 mg',
@@ -37,7 +37,7 @@ test('with no grant the payload is generic', () => {
   assert.equal(result.payload.body, 'You have a reminder');
 });
 
-test('the variables a caller supplied do not appear anywhere in a generic payload', () => {
+void test('the variables a caller supplied do not appear anywhere in a generic payload', () => {
   const result = render('medication_reminder', ACCOUNT, null, {
     name: 'Naltrexone',
   });
@@ -45,7 +45,7 @@ test('the variables a caller supplied do not appear anywhere in a generic payloa
   assert.equal(serialised.includes('Naltrexone'), false);
 });
 
-test('every kind produces the same generic payload', () => {
+void test('every kind produces the same generic payload', () => {
   // Per-kind generic wording ("You have a medication reminder") would leak the
   // category, which is what the safeguard forbids.
   const kinds = [
@@ -62,7 +62,7 @@ test('every kind produces the same generic payload', () => {
   assert.equal(bodies.size, 1);
 });
 
-test('a forged grant does not unlock the specific payload', () => {
+void test('a forged grant does not unlock the specific payload', () => {
   // TypeScript branding alone is defeated by exactly this cast, which is why
   // `render` also checks a module-private WeakSet.
   const forged = {
@@ -76,12 +76,12 @@ test('a forged grant does not unlock the specific payload', () => {
   assert.equal(result.variant, 'generic');
 });
 
-test('no row means off, because defaultOff is the whole point', async () => {
+void test('no row means off, because defaultOff is the whole point', async () => {
   const grant = await readSpecificContentGrant(txReturning(null), ACCOUNT);
   assert.equal(grant, null);
 });
 
-test('specific_content = false means off', async () => {
+void test('specific_content = false means off', async () => {
   const grant = await readSpecificContentGrant(
     txReturning({ specific_content: false, opted_in_at: null }),
     ACCOUNT,
@@ -89,7 +89,7 @@ test('specific_content = false means off', async () => {
   assert.equal(grant, null);
 });
 
-test('a real grant, and only then, produces the specific wording', async () => {
+void test('a real grant, and only then, produces the specific wording', async () => {
   const grant = await readSpecificContentGrant(
     txReturning({ specific_content: true, opted_in_at: new Date() }),
     ACCOUNT,
@@ -104,7 +104,7 @@ test('a real grant, and only then, produces the specific wording', async () => {
   assert.equal(result.payload.body, 'Naltrexone · 50 mg');
 });
 
-test("one account's opt-in does not authorise another account's lock screen", async () => {
+void test("one account's opt-in does not authorise another account's lock screen", async () => {
   const grant = await readSpecificContentGrant(
     txReturning({ specific_content: true, opted_in_at: new Date() }),
     ACCOUNT,
@@ -114,12 +114,12 @@ test("one account's opt-in does not authorise another account's lock screen", as
   assert.equal(result.variant, 'generic');
 });
 
-test('the data block carries no template variables', () => {
+void test('the data block carries no template variables', () => {
   const data = dataFor('medication_reminder', 'med-123');
   assert.deepEqual(data, { kind: 'medication_reminder', refId: 'med-123', fetch: 'true' });
 });
 
-test('the delivery record has nowhere to put the text', () => {
+void test('the delivery record has nowhere to put the text', () => {
   // `ops.notification_log` has no body column and this statement names no such
   // parameter. Asserted rather than assumed: the absence is the safeguard, and
   // an absence is what quietly stops being true.

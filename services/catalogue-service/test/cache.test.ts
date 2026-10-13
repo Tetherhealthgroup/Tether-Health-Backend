@@ -54,7 +54,7 @@ function fakeResponse(): { res: Response; captured: Captured } {
   return { res, captured };
 }
 
-test('If-None-Match is honoured as a list, with weak tags and the wildcard', () => {
+void test('If-None-Match is honoured as a list, with weak tags and the wildcard', () => {
   const etag = etagOf('{"areas":[]}');
 
   assert.equal(matchesIfNoneMatch(undefined, etag), false);
@@ -70,7 +70,7 @@ test('If-None-Match is honoured as a list, with weak tags and the wildcard', () 
   assert.equal(matchesIfNoneMatch('"stale", "older"', etag), false);
 });
 
-test('a matching If-None-Match answers 304 with no body, and still sets the validators', () => {
+void test('a matching If-None-Match answers 304 with no body, and still sets the validators', () => {
   const body = { areas: [{ id: 'tobacco' }] };
   const etag = etagOf(JSON.stringify(body));
 
@@ -87,7 +87,7 @@ test('a matching If-None-Match answers 304 with no body, and still sets the vali
   assert.match(captured.headers['Cache-Control'] ?? '', /max-age=\d+/);
 });
 
-test('a non-matching If-None-Match answers 200 with the body', () => {
+void test('a non-matching If-None-Match answers 200 with the body', () => {
   const body = { areas: [{ id: 'tobacco' }] };
   const { res, captured } = fakeResponse();
 
@@ -97,7 +97,7 @@ test('a non-matching If-None-Match answers 200 with the body', () => {
   assert.equal(captured.body, JSON.stringify(body));
 });
 
-test('the same catalogue hashes to the same ETag on every request', () => {
+void test('the same catalogue hashes to the same ETag on every request', () => {
   // The regression this guards: a `generatedAt: new Date()` inside the bundle.
   // It reads as harmless metadata and it defeats the entire endpoint, because
   // the hash is taken over the body and the body would differ every time.
@@ -129,7 +129,7 @@ test('the same catalogue hashes to the same ETag on every request', () => {
   assert.notEqual(first.captured.headers.ETag, third.captured.headers.ETag);
 });
 
-test('the catalogue is declared publicly cacheable, and says what it varies on', () => {
+void test('the catalogue is declared publicly cacheable, and says what it varies on', () => {
   const { res, captured } = fakeResponse();
   sendCacheable(fakeRequest(), res, { safeguards: [] });
 

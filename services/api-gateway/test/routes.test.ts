@@ -22,7 +22,7 @@ import { statusForProxyError } from '../src/proxy.ts';
  * fail silently when wrong, and both are security-relevant in one direction.
  */
 
-test('prefix matching respects path-segment boundaries', () => {
+void test('prefix matching respects path-segment boundaries', () => {
   assert.equal(matchesPrefix('/api/v1/care', '/api/v1/care'), true);
   assert.equal(matchesPrefix('/api/v1/care', '/api/v1/care/'), true);
   assert.equal(matchesPrefix('/api/v1/care', '/api/v1/care/patients'), true);
@@ -38,7 +38,7 @@ test('prefix matching respects path-segment boundaries', () => {
   assert.equal(matchesPrefix('/api/v1/care', '/care'), false);
 });
 
-test('the service prefix is stripped and the rest of the path survives', () => {
+void test('the service prefix is stripped and the rest of the path survives', () => {
   assert.equal(stripServicePrefix('/api/v1/auth', '/api/v1/auth/sessions'), '/sessions');
   assert.equal(
     stripServicePrefix('/api/v1/auth', '/api/v1/auth/sessions/refresh'),
@@ -50,7 +50,7 @@ test('the service prefix is stripped and the rest of the path survives', () => {
   );
 });
 
-test('the query string is preserved across stripping', () => {
+void test('the query string is preserved across stripping', () => {
   assert.equal(
     stripServicePrefix('/api/v1/records', '/api/v1/records/answers?enrolment=abc&limit=50'),
     '/answers?enrolment=abc&limit=50',
@@ -59,19 +59,19 @@ test('the query string is preserved across stripping', () => {
   assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist?source=astro'), '/?source=astro');
 });
 
-test('a bare prefix becomes the downstream root, not the empty string', () => {
+void test('a bare prefix becomes the downstream root, not the empty string', () => {
   // `POST /api/v1/waitlist` is the website form's only endpoint; it must arrive
   // at website-service as `POST /`, and `POST ` is not a request line.
   assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist'), '/');
   assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist/'), '/');
 });
 
-test('a path outside the prefix is returned untouched', () => {
+void test('a path outside the prefix is returned untouched', () => {
   assert.equal(stripServicePrefix('/api/v1/care', '/api/v1/careful/x'), '/api/v1/careful/x');
   assert.equal(stripServicePrefix('/api/v1/care', '/healthz'), '/healthz');
 });
 
-test('every documented prefix resolves to its own service', () => {
+void test('every documented prefix resolves to its own service', () => {
   const expected: ReadonlyArray<readonly [string, string]> = [
     ['/api/v1/auth/sessions', 'auth-service'],
     ['/api/v1/catalogue/areas', 'catalogue-service'],
@@ -94,14 +94,14 @@ test('every documented prefix resolves to its own service', () => {
   assert.equal(new Set(ROUTES.map((r) => r.urlKey)).size, ROUTES.length);
 });
 
-test('nothing outside the table is routed anywhere', () => {
+void test('nothing outside the table is routed anywhere', () => {
   assert.equal(routeFor('/api/v1/admin'), null);
   assert.equal(routeFor('/api/v2/records'), null);
   assert.equal(routeFor('/records'), null);
   assert.equal(routeFor('/'), null);
 });
 
-test('the public allowlist lets through exactly what it should', () => {
+void test('the public allowlist lets through exactly what it should', () => {
   // Issuing a token cannot require a token.
   assert.equal(isPublic('POST', '/api/v1/auth/sessions'), true);
   assert.equal(isPublic('POST', '/api/v1/auth/sessions/refresh'), true);
@@ -122,7 +122,7 @@ test('the public allowlist lets through exactly what it should', () => {
   assert.equal(isPublic('OPTIONS', '/api/v1/records/answers'), true);
 });
 
-test('the public allowlist stops at reads of the catalogue', () => {
+void test('the public allowlist stops at reads of the catalogue', () => {
   // Editing the design bundle is an editorial action, not a public one.
   assert.equal(isPublic('POST', '/api/v1/catalogue/areas'), false);
   assert.equal(isPublic('PUT', '/api/v1/catalogue/areas/smoking'), false);
@@ -130,7 +130,7 @@ test('the public allowlist stops at reads of the catalogue', () => {
   assert.equal(isPublic('DELETE', '/api/v1/catalogue/areas/smoking'), false);
 });
 
-test('every PHI-bearing prefix requires a token, on every method', () => {
+void test('every PHI-bearing prefix requires a token, on every method', () => {
   const guarded = [
     '/api/v1/enrolments',
     '/api/v1/enrolments/abc/consent',
@@ -149,7 +149,7 @@ test('every PHI-bearing prefix requires a token, on every method', () => {
   }
 });
 
-test('an allowlist entry does not leak onto a neighbouring prefix', () => {
+void test('an allowlist entry does not leak onto a neighbouring prefix', () => {
   // The same boundary bug as routing, but this one fails open: `/api/v1/authz`
   // exempted because it starts with `/api/v1/auth` would be an unauthenticated
   // door into whatever was mounted there next.
@@ -159,7 +159,7 @@ test('an allowlist entry does not leak onto a neighbouring prefix', () => {
   assert.equal(isPublic('GET', '/healthzz'), false);
 });
 
-test('unreachable and unresponsive upstreams are told apart', () => {
+void test('unreachable and unresponsive upstreams are told apart', () => {
   // 502: nothing is listening. A deploy, a DNS entry, a container that died.
   assert.equal(statusForProxyError('ECONNREFUSED'), 502);
   assert.equal(statusForProxyError('ENOTFOUND'), 502);
