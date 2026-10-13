@@ -44,12 +44,12 @@ table and column, so the two cannot drift silently.
 | | | `record.observation`, `record.screen_answer`, `record.lapse_event` | S | share preview, `repository.ts:506-543` |
 | | | `catalogue.shell_rule`, `.area`, `.measure` | S(id, rule), S(id, name, product_id), S(id, label) | `repository.ts:251,267,515` |
 | | | `ops.audit_event` | I | `enrolment-service/src/audit.ts:73` |
-| records → `tether_records_login` | programme, record, catalogue, ops | `programme.enrolment`, `programme.sharing_consent` | S, D | `records-service/src/postgres-store.ts:143,153,334,391,402,417` |
-| | | `record.screen_answer` | S, D, I(enrolment_id, screen_id, block_index, kind, value), U(kind, value) | `postgres-store.ts:191,478` |
-| | | `record.lapse_event` | S, D, I(enrolment_id, occurred_at, severity, context) | `postgres-store.ts:229,402` |
-| | | `record.observation` | S, D, I(enrolment_id, measure_id, value_num, value_text, unit, observed_at, source, platform) | `postgres-store.ts:282,402` |
-| | | `catalogue.area` | S(id, name) | `postgres-store.ts:357` |
-| | | `ops.audit_event` | S, I | `records-service/src/audit.ts:52`; sync receipts `postgres-store.ts:373` |
+| records → `tether_records_login` | programme, record, catalogue, ops | `programme.enrolment`, `programme.sharing_consent` | S, D | `records-service/src/postgres-store.ts:144,154,342,398,409,424` |
+| | | `record.screen_answer` | S, D, I(enrolment_id, screen_id, block_index, kind, value), U(kind, value) | `postgres-store.ts:195,485` |
+| | | `record.lapse_event` | S, D, I(enrolment_id, occurred_at, severity, context) | `postgres-store.ts:236,409` |
+| | | `record.observation` | S, D, I(enrolment_id, measure_id, value_num, value_text, unit, observed_at, source, platform) | `postgres-store.ts:289,409` |
+| | | `catalogue.area` | S(id, name) | `postgres-store.ts:364` |
+| | | `ops.audit_event` | S, I | `records-service/src/audit.ts:52`; sync receipts `postgres-store.ts:381` |
 | care_team → `tether_care_team_login` | programme, record, care, ops | `programme.sharing_consent` | S(id, enrolment_id, scope, recipient_kind, recipient_id, consent_version, granted_at, revoked_at) | `care-team-service/src/postgres-store.ts:201,237` |
 | | | `programme.enrolment` | S(id, account_id, area_id, status, joined_on) | `postgres-store.ts:198-202,267,309` |
 | | | `record.screen_answer` | S(id, enrolment_id, screen_id, block_index, kind, value, answered_at) | `postgres-store.ts:295,297,414` |

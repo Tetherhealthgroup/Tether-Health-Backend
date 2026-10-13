@@ -187,13 +187,20 @@ export function createPostgresStore(): RecordStore {
       // gone from the record. With an empty array `block_index = ANY('{}')` is
       // false for every row, which clears the screen — the correct reading of
       // `PUT {}`.
+      //
+      // The enrolment is named as the caller's as well as by id: a DELETE that
+      // matches nothing because RLS hid the row reads exactly like one that had
+      // nothing to delete, so the predicate is what makes the intent visible.
       const removed = await ctx.tx.query<{ block_index: number }>(
         `DELETE FROM record.screen_answer
            WHERE enrolment_id = $1
              AND screen_id = $2
              AND NOT (block_index = ANY($3::smallint[]))
+             AND EXISTS (SELECT 1 FROM programme.enrolment own
+                          WHERE own.id = record.screen_answer.enrolment_id
+                            AND own.account_id = $4)
          RETURNING block_index`,
-        [enrolmentId, screenId, blocks.map((block) => block.blockIndex)],
+        [enrolmentId, screenId, blocks.map((block) => block.blockIndex), ctx.accountId],
       );
       return { written, removed: removed.length };
     },

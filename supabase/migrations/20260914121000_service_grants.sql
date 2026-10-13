@@ -111,33 +111,33 @@ GRANT INSERT ON ops.audit_event TO tether_enrolment;
 
 GRANT USAGE ON SCHEMA programme, record, catalogue, ops TO tether_records;
 
--- records-service/src/postgres-store.ts:143,153,391 SELECT; :417 DELETE (DELETE /record).
+-- records-service/src/postgres-store.ts:144,154,398 SELECT; :424 DELETE (DELETE /record).
 GRANT SELECT, DELETE ON programme.enrolment TO tether_records;
--- postgres-store.ts:334 SELECT; :402 DELETE. Reads and erases; never writes a
+-- postgres-store.ts:342 SELECT; :409 DELETE. Reads and erases; never writes a
 -- consent, which is the person's act in enrolment-service.
 GRANT SELECT, DELETE ON programme.sharing_consent TO tether_records;
 
--- postgres-store.ts:478 INSERT … ON CONFLICT DO UPDATE (kind, value); :191 DELETE.
+-- postgres-store.ts:485 INSERT … ON CONFLICT DO UPDATE (kind, value); :195 DELETE.
 GRANT SELECT, DELETE ON record.screen_answer TO tether_records;
 GRANT INSERT (enrolment_id, screen_id, block_index, kind, value)
   ON record.screen_answer TO tether_records;
 GRANT UPDATE (kind, value) ON record.screen_answer TO tether_records;
 
--- postgres-store.ts:229 INSERT; :402 DELETE. No UPDATE: a lapse is an event
+-- postgres-store.ts:236 INSERT; :409 DELETE. No UPDATE: a lapse is an event
 -- (0003 puts a rule on it as well).
 GRANT SELECT, DELETE ON record.lapse_event TO tether_records;
 GRANT INSERT (enrolment_id, occurred_at, severity, context)
   ON record.lapse_event TO tether_records;
 
--- postgres-store.ts:282 INSERT; :402 DELETE. Observations are immutable.
+-- postgres-store.ts:289 INSERT; :409 DELETE. Observations are immutable.
 GRANT SELECT, DELETE ON record.observation TO tether_records;
 GRANT INSERT (enrolment_id, measure_id, value_num, value_text, unit, observed_at, source, platform)
   ON record.observation TO tether_records;
 
--- postgres-store.ts:357 — the area's display name, for the export.
+-- postgres-store.ts:364 — the area's display name, for the export.
 GRANT SELECT (id, name) ON catalogue.area TO tether_records;
 
--- records-service/src/audit.ts:52 INSERT; postgres-store.ts:373 SELECT, to find
+-- records-service/src/audit.ts:52 INSERT; postgres-store.ts:381 SELECT, to find
 -- a sync receipt.
 -- `audit_event_subject_read` (0010) limits that read to the caller's own account.
 GRANT SELECT, INSERT ON ops.audit_event TO tether_records;

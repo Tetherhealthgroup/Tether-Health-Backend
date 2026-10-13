@@ -5,25 +5,37 @@ import { upsertAccount, deleteAccount, findAccount } from '../../services/auth-s
 import { createSessionStore } from '../../services/auth-service/src/store.ts';
 import { createPostgresStore as createCareStore } from '../../services/care-team-service/src/postgres-store.ts';
 import { writeAudit as writeCareAudit } from '../../services/care-team-service/src/audit.ts';
+import { loadAreas, loadBundle } from '../../services/catalogue-service/src/repository.ts';
 import {
   createCondition,
   createMedication,
   createVital,
   deleteMedication,
+  getProfile,
   listMedications,
   listVitals,
+  upsertProfile,
 } from '../../services/chronic-service/src/store.ts';
 import {
   grantConsent,
+  insertEnrolment,
+  loadActiveCeiling,
+  loadActiveProgrammes,
+  loadArea,
   loadConsents,
   loadEnrolmentRow,
   loadEnrolments,
   loadPreviewSource,
   revokeLive,
+  setHidden,
+  setStatus,
 } from '../../services/enrolment-service/src/repository.ts';
 import {
+  readPreference,
+  recordDelivery,
   registerDevice,
   removeDevice,
+  setPreference,
   tokensFor,
 } from '../../services/notification-service/src/store.ts';
 import { resolveAllowlist } from '../../services/realtime-service/src/allowlist.ts';
@@ -105,13 +117,15 @@ async function seed(pg: TestPostgres): Promise<void> {
     `TRUNCATE identity.account, ops.audit_event, ops.waitlist_enquiry RESTART IDENTITY CASCADE`,
   );
   await pg.admin(`
-    INSERT INTO catalogue.area (id, name, scope, status, position)
-      VALUES ('tobacco', 'Tobacco', 'synthetic', 'in_development', 1)
+    INSERT INTO catalogue.area (id, name, scope, status, position) VALUES
+      ('tobacco', 'Tobacco', 'synthetic', 'in_development', 1),
+      ('alcohol', 'Alcohol', 'synthetic', 'in_development', 2),
+      ('sleep', 'Sleep', 'synthetic', 'in_development', 3)
       ON CONFLICT DO NOTHING;
     INSERT INTO catalogue.product (id, name, area_id, status)
       VALUES ('breathefree', 'Synthetic product', 'tobacco', 'in_development')
       ON CONFLICT DO NOTHING;
-    UPDATE catalogue.area SET product_id = 'breathefree' WHERE id = 'tobacco';
+    UPDATE catalogue.area SET product_id = 'breathefree';
     INSERT INTO catalogue.measure (id, area_id, label, unit)
       VALUES ('craving_intensity', 'tobacco', 'Craving', 'score')
       ON CONFLICT DO NOTHING;
@@ -1214,13 +1228,185 @@ function registerSuite(pg: TestPostgres): void {
     await seed(pg);
     const db = pg.databaseFor('catalogue');
 
-    assert.equal((await db.withoutPrincipal((tx) => tx.query(`SELECT id FROM catalogue.area`))).length, 1);
+    assert.equal((await db.withoutPrincipal((tx) => tx.query(`SELECT id FROM catalogue.area`))).length, 3);
     assert.equal(await failsWith(db.withoutPrincipal((tx) => tx.query(`INSERT INTO catalogue.area (id, name, scope, status, position) VALUES ('x','x','x','planned',9)`))), PERMISSION_DENIED);
     assert.equal(await failsWith(db.withoutPrincipal((tx) => tx.query(`UPDATE catalogue.area SET name = 'x'`))), PERMISSION_DENIED);
     assert.equal(await failsWith(db.withoutPrincipal((tx) => tx.query(`DELETE FROM catalogue.area`))), PERMISSION_DENIED);
     for (const table of ['identity.account', 'programme.enrolment', 'ops.audit_event']) {
       assert.equal(await failsWith(db.withoutPrincipal((tx) => tx.query(`SELECT 1 FROM ${table}`))), PERMISSION_DENIED, table);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Every statement a service issues is inside its grants
+  // -------------------------------------------------------------------------
+
+  test('enrolment: joining, pausing, hiding and the two-active ceiling all work under the service role', async () => {
+    // The ceiling is a deferred constraint trigger that reads `catalogue.shell_rule`
+    // and `programme.enrolment` as the *invoking* role, so it is only right if the
+    // grants and policies let that role read both.
+    await seed(pg);
+    const db = pg.databaseFor('enrolment');
+
+    assert.equal(await db.withPrincipal(STRANGER, (tx) => loadActiveCeiling(tx)), 2);
+    assert.equal((await db.withPrincipal(STRANGER, (tx) => loadArea(tx, 'tobacco')))?.productId, 'breathefree');
+
+    await db.withPrincipal(STRANGER, async (tx) => {
+      await insertEnrolment(tx, STRANGER, 'tobacco');
+      await insertEnrolment(tx, STRANGER, 'alcohol');
+    });
+    assert.equal((await db.withPrincipal(STRANGER, (tx) => loadActiveProgrammes(tx, STRANGER))).length, 2);
+
+    // A third at once breaches the ceiling, and the refusal comes from the database.
+    assert.equal(
+      await failsWith(db.withPrincipal(STRANGER, (tx) => insertEnrolment(tx, STRANGER, 'sleep'))),
+      '23514',
+      'the two_active_max trigger did not fire for the service role',
+    );
+
+    // Pausing one frees a place, in the same transaction as the join.
+    await db.withPrincipal(STRANGER, async (tx) => {
+      assert.equal((await setStatus(tx, STRANGER, 'tobacco', 'paused'))?.status, 'paused');
+      await insertEnrolment(tx, STRANGER, 'sleep');
+    });
+    const hidden = await db.withPrincipal(STRANGER, (tx) => setHidden(tx, STRANGER, 'alcohol', true));
+    assert.equal(hidden?.hidden, true);
+    assert.equal((await db.withPrincipal(STRANGER, (tx) => loadEnrolments(tx, STRANGER))).length, 3);
+  });
+
+  test('records: appending, replacing, syncing and reading the export all work under the service role', async () => {
+    await seed(pg);
+    const db = pg.databaseFor('records');
+    const store = createRecordsStore();
+
+    await db.withPrincipal(A, async (tx) => {
+      const ctx = { tx, accountId: A };
+
+      const lapse = { occurredAt: '2026-06-05T00:00:00.000Z', severity: 'synthetic', context: ['c'] };
+      assert.equal((await store.appendLapse(ctx, ENR_A, lapse)).created, true);
+      assert.equal((await store.appendLapse(ctx, ENR_A, lapse)).created, false, 'a replay must not write twice');
+
+      const observation = {
+        measureId: 'craving_intensity', value: 4, unit: 'score',
+        observedAt: '2026-06-05T00:00:00.000Z', source: 'self_report' as const, platform: null,
+      };
+      assert.equal((await store.appendObservation(ctx, ENR_A, observation)).created, true);
+      assert.equal((await store.appendObservation(ctx, ENR_A, observation)).created, false);
+
+      const replaced = await store.replaceScreenAnswers(ctx, ENR_A, 'S02', [
+        { blockIndex: 0, kind: 'chips', value: [1] },
+        { blockIndex: 1, kind: 'slider', value: 5 },
+      ]);
+      assert.deepEqual(replaced, { written: 2, removed: 0 });
+      assert.deepEqual(
+        await store.replaceScreenAnswers(ctx, ENR_A, 'S02', [{ blockIndex: 0, kind: 'chips', value: [2] }]),
+        { written: 1, removed: 1 },
+      );
+      assert.equal((await store.mergeScreenAnswers(ctx, ENR_A, 'S02', [{ blockIndex: 3, kind: 'slider', value: 1 }])).written, 1);
+
+      assert.equal((await store.lapses(ctx, ENR_A)).length, 2);
+      assert.equal((await store.observations(ctx, ENR_A)).length, 3);
+      assert.equal((await store.enrolmentForArea(ctx, 'tobacco'))?.id, ENR_A);
+      assert.deepEqual([...(await store.areaNames(ctx, ['tobacco'])).entries()], [['tobacco', 'Tobacco']]);
+      assert.equal((await store.liveConsents(ctx)).length, 2);
+
+      // A sync receipt is an audit row, found again by the same role.
+      await store.lockSyncBatch(ctx, 'batch-1');
+      assert.equal(await store.findSyncReceipt(ctx, 'batch-1'), null);
+      await writeRecordsAudit(tx, {
+        accountId: A, actorRole: 'patient', action: 'record.sync', resourceType: 'sync_batch',
+        resourceId: 'batch-1', detail: { idempotencyKey: 'batch-1' },
+      });
+      assert.equal((await store.findSyncReceipt(ctx, 'batch-1'))?.idempotencyKey, 'batch-1');
+    });
+    // Another account cannot find A's receipt.
+    await db.withPrincipal(B, async (tx) => {
+      assert.equal(await store.findSyncReceipt({ tx, accountId: B }, 'batch-1'), null);
+    });
+  });
+
+  test('care-team: the routing policy is readable, and an escalation raised under a notes consent is listed', async () => {
+    await seed(pg);
+    const store = createCareStore();
+
+    await pg.databaseFor('care_team').withPrincipal(CLIN2, async (tx) => {
+      const ctx = { tx, clinicianId: CLIN2 };
+      const policy = await store.escalationPolicy(ctx, 'tobacco');
+      assert.equal(policy?.recipientKind, 'clinician');
+      assert.equal(await store.escalationPolicy(ctx, 'sleep'), null);
+
+      assert.deepEqual(await store.escalations(ctx, ENR_A), []);
+      assert.ok(policy);
+      const raised = await store.raiseEscalation(ctx, {
+        enrolmentId: ENR_A, consentId: CONSENT_CLIN2_NOTES, signal: 'synthetic signal', detail: 'synthetic detail', policy,
+      });
+      assert.deepEqual((await store.escalations(ctx, ENR_A)).map((e) => e.id), [raised.id]);
+    });
+
+    // The patient it is about can read it; a stranger cannot.
+    const asPatient = (who: string) =>
+      pg.asRole('rls_probe', who, (tx) => tx.query(`SELECT id FROM care.escalation`));
+    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$`);
+    await pg.admin(`GRANT USAGE ON SCHEMA programme, care TO rls_probe`);
+    await pg.admin(`GRANT ALL ON ALL TABLES IN SCHEMA programme, care TO rls_probe`);
+    assert.equal((await asPatient(A)).length, 1, 'the person an escalation is about cannot see it');
+    assert.equal((await asPatient(STRANGER)).length, 0);
+    assert.equal((await asPatient(B)).length, 0);
+  });
+
+  test('chronic: a first write creates the profile, and the profile patch reaches only that account\'s row', async () => {
+    await seed(pg);
+    const db = pg.databaseFor('chronic');
+
+    assert.equal(await db.withPrincipal(STRANGER, (tx) => getProfile(tx, STRANGER)), null);
+    const profile = await db.withPrincipal(STRANGER, (tx) =>
+      upsertProfile(tx, STRANGER, { displayName: 'Synthetic Person', healthScore: 40 }),
+    );
+    assert.equal(profile.displayName, 'Synthetic Person');
+    assert.equal(profile.healthScore, 40);
+    assert.equal(await count(pg, `SELECT 1 FROM chronic.profile WHERE display_name = 'Synthetic Person'`), 1);
+    assert.equal(await count(pg, `SELECT 1 FROM chronic.profile`), 3);
+  });
+
+  test('notification: preferences and the delivery log work under the service role, and the log holds no body', async () => {
+    await seed(pg);
+    const db = pg.databaseFor('notification');
+
+    assert.deepEqual(await db.withPrincipal(A, (tx) => readPreference(tx, A)), { specificContent: false, optedInAt: null });
+    const on = await db.withPrincipal(A, (tx) => setPreference(tx, A, true, 'synthetic wording'));
+    assert.equal(on.specificContent, true);
+    assert.ok(on.optedInAt);
+    const off = await db.withPrincipal(A, (tx) => setPreference(tx, A, false, null));
+    assert.equal(off.specificContent, false);
+    assert.equal(off.optedInAt, null);
+
+    await db.withPrincipal(A, (tx) =>
+      recordDelivery(tx, { accountId: A, kind: 'check_in_due', variant: 'generic', deviceCount: 1, delivered: 1, failed: 0, provider: 'fcm' }),
+    );
+    assert.equal(await count(pg, `SELECT 1 FROM ops.notification_log WHERE account_id = '${A}'`), 1);
+    // Append-only: no DELETE grant, and 0006's DO INSTEAD NOTHING rule makes an
+    // UPDATE a silent no-op before privileges are checked.
+    assert.equal(await failsWith(db.withPrincipal(A, (tx) => tx.query(`DELETE FROM ops.notification_log`))), PERMISSION_DENIED);
+    await db.withPrincipal(A, (tx) => tx.query(`UPDATE ops.notification_log SET kind = 'x'`));
+    assert.equal(await count(pg, `SELECT 1 FROM ops.notification_log WHERE kind = 'x'`), 0, 'a delivery-log row was edited');
+    // And one account cannot write a log row for another (the policy, with the grant in place).
+    assert.equal(
+      await failsWith(
+        db.withPrincipal(A, (tx) =>
+          recordDelivery(tx, { accountId: B, kind: 'x', variant: 'generic', deviceCount: 0, delivered: 0, failed: 0, provider: 'fcm' }),
+        ),
+      ),
+      '42501',
+    );
+  });
+
+  test('catalogue: every statement the service issues for the bundle is inside its grants', async () => {
+    await seed(pg);
+    const db = pg.databaseFor('catalogue');
+
+    const bundle = await db.withoutPrincipal((tx) => loadBundle(tx, 'en'));
+    assert.equal(bundle.areas.length, 3);
+    assert.equal((await db.withoutPrincipal((tx) => loadAreas(tx))).length, 3);
   });
 
   // -------------------------------------------------------------------------
