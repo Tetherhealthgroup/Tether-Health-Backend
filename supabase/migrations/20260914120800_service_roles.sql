@@ -16,20 +16,26 @@
 --     They hold no privilege of their own, so a credential can be rotated by
 --     replacing the login role without touching a single grant.
 --
--- Every role below is NOSUPERUSER, NOBYPASSRLS, NOCREATEDB, NOCREATEROLE and
--- NOREPLICATION, and none of them owns an object, so FORCE and ENABLE are both
--- in play for all of them.
+-- Every role below is created with PostgreSQL's defaults, which are NOSUPERUSER,
+-- NOBYPASSRLS, NOCREATEDB, NOCREATEROLE and NOREPLICATION, and none of them owns
+-- an object, so FORCE and ENABLE are both in play for all of them. The attributes
+-- are deliberately NOT re-asserted with ALTER ROLE: a migrator that is not a
+-- superuser (Supabase's `postgres`) may be refused an ALTER that names an
+-- attribute it does not itself hold, even to switch it off. Instead a guard at
+-- the end of this file RAISEs if any `tether_` role has ended up privileged, so
+-- a role someone loosened by hand fails the next apply loudly rather than being
+-- quietly tightened.
 --
 -- No password is set here, and none ever should be: a credential in a migration
 -- is a credential in every clone of the repository. The login roles are also
 -- created LOCKED (`VALID UNTIL '-infinity'`), so that a database whose
 -- `pg_hba.conf` is permissive, or a deployment that forgets this step, does not
--- end up with eight passwordless accounts that can connect. The operator sets
+-- end up with nine passwordless accounts that can connect. The operator sets
 -- the password and unlocks each role out of band; see `db/ROLES.md`.
 --
--- Idempotent: every statement is safe to run twice, and `ALTER ROLE` re-asserts
--- the attributes so that a role someone loosened by hand is tightened again by
--- the next apply.
+-- Safe to run twice: roles are created only if absent. (The other two files
+-- this branch adds are applied once, like any migration; 0010 is not
+-- idempotent.)
 
 -- ---------------------------------------------------------------------------
 -- Group roles (NOLOGIN) — hold the privileges
@@ -50,10 +56,7 @@ BEGIN
       EXECUTE format('CREATE ROLE %I NOLOGIN', 'tether_' || service);
     END IF;
 
-    EXECUTE format(
-      'ALTER ROLE %I NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION',
-      'tether_' || service
-    );
+    -- `tether_auth` was created NOLOGIN by 0004 and is left exactly as it is.
   END LOOP;
 END
 $$;
@@ -84,13 +87,10 @@ BEGIN
       );
     END IF;
 
-    -- Re-asserted on every apply. VALID UNTIL is deliberately NOT touched here:
+    -- LOGIN and INHERIT only. VALID UNTIL is deliberately NOT touched here:
     -- once an operator has unlocked a role, re-running this migration must not
     -- lock the service out of its own database.
-    EXECUTE format(
-      'ALTER ROLE %I LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT',
-      login
-    );
+    EXECUTE format('ALTER ROLE %I LOGIN INHERIT', login);
 
     -- Membership of exactly one group. Granted explicitly as well as by
     -- IN ROLE above, so that a role created by an earlier run of a different
@@ -149,5 +149,30 @@ BEGIN
       END LOOP;
     END IF;
   END LOOP;
+END
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Guard: no tether_ role may be privileged
+-- ---------------------------------------------------------------------------
+
+-- Fails the migration, and so rolls the transaction back, if a `tether_` role is
+-- a superuser, bypasses RLS, can replicate, or can create roles or databases.
+-- That is how a pre-existing role of the same name that someone made powerful, or
+-- a platform that hands every new role an attribute, is caught on the apply that
+-- would have trusted it.
+DO $$
+DECLARE
+  offender text;
+BEGIN
+  SELECT string_agg(rolname, ', ') INTO offender
+    FROM pg_roles
+   WHERE rolname LIKE 'tether\_%'
+     AND (rolsuper OR rolbypassrls OR rolreplication OR rolcreaterole OR rolcreatedb);
+
+  IF offender IS NOT NULL THEN
+    RAISE EXCEPTION 'service role(s) hold a privileged attribute: %', offender
+      USING HINT = 'A service role must not be SUPERUSER, BYPASSRLS, REPLICATION, CREATEROLE or CREATEDB.';
+  END IF;
 END
 $$;
