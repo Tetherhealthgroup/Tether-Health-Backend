@@ -1172,7 +1172,12 @@ function registerSuite(pg: TestPostgres): void {
     );
     assert.deepEqual(policy?.roles, [owner], 'the release policy is not named for the function owner');
 
-    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_owner') THEN CREATE ROLE rls_owner NOLOGIN; END IF; END $$`);
+    // A fresh role, created here and dropped in `finally`: nothing it holds
+    // outlives the test, so no later test (the role-census ones in particular)
+    // can see it, and a failed assertion cannot leave it owning the function.
+    await pg.admin(`DROP ROLE IF EXISTS rls_owner`);
+    await pg.admin(`CREATE ROLE rls_owner NOLOGIN`);
+    const [{ q: ownerIdent } = { q: '' }] = await pg.admin<{ q: string }>(`SELECT quote_ident($1) AS q`, [owner]);
     await pg.admin(`GRANT USAGE, CREATE ON SCHEMA ops TO rls_owner`);
     await pg.admin(`GRANT USAGE ON SCHEMA public TO rls_owner`);
     await pg.admin(`GRANT SELECT, DELETE ON ops.device_token TO rls_owner`);
@@ -1192,15 +1197,16 @@ function registerSuite(pg: TestPostgres): void {
 
       // Without the policy the same owner can release nothing: the dependency is real.
       await pg.admin(`INSERT INTO ops.device_token (account_id, token, platform) VALUES ('${A}', 'token-a2', 'android')`);
-      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO ${owner}`);
-      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO ${owner}`);
+      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO ${ownerIdent}`);
+      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO ${ownerIdent}`);
       await notify.withPrincipal(B, (tx) => tx.query(`SELECT ops.release_device_token('token-a2')`));
       assert.equal(await count(pg, `SELECT 1 FROM ops.device_token WHERE token = 'token-a2'`), 1, 'the policy is not what makes it work');
     } finally {
-      await pg.admin(`ALTER FUNCTION ops.release_device_token(text) OWNER TO ${owner}`);
-      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO ${owner}`);
-      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO ${owner}`);
-      await pg.admin(`REVOKE CREATE ON SCHEMA ops FROM rls_owner`);
+      await pg.admin(`ALTER FUNCTION ops.release_device_token(text) OWNER TO ${ownerIdent}`);
+      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO ${ownerIdent}`);
+      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO ${ownerIdent}`);
+      await pg.admin(`DROP OWNED BY rls_owner`);
+      await pg.admin(`DROP ROLE rls_owner`);
     }
   });
 
@@ -1233,10 +1239,12 @@ function registerSuite(pg: TestPostgres): void {
 
     // Now an owner that is neither a superuser nor BYPASSRLS, with the policies
     // pointed at it. The function must still return the notes recipient's rows.
-    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_owner') THEN CREATE ROLE rls_owner NOLOGIN; END IF; END $$`);
+    await pg.admin(`DROP ROLE IF EXISTS rls_owner`);
+    await pg.admin(`CREATE ROLE rls_owner NOLOGIN`);
     await pg.admin(`GRANT USAGE ON SCHEMA public, programme, record TO rls_owner`);
     await pg.admin(`GRANT USAGE, CREATE ON SCHEMA care TO rls_owner`);
     await pg.admin(`GRANT SELECT ON programme.sharing_consent, record.lapse_event TO rls_owner`);
+    const [{ q: ownerIdent } = { q: '' }] = await pg.admin<{ q: string }>(`SELECT quote_ident($1) AS q`, [owner]);
     const repoint = async (target: string) => {
       const role = await pg.admin<{ q: string }>(`SELECT quote_ident($1) AS q`, [target]);
       const quoted = role[0]?.q ?? '';
@@ -1274,7 +1282,7 @@ function registerSuite(pg: TestPostgres): void {
       await repoint(owner);
       assert.equal((await detail(CLIN2, ENR_A)).length, 0, 'the policies are not what makes it work');
     } finally {
-      await pg.admin(`ALTER FUNCTION care.lapse_details(uuid) OWNER TO ${owner}`);
+      await pg.admin(`ALTER FUNCTION care.lapse_details(uuid) OWNER TO ${ownerIdent}`);
       await repoint(owner);
       await pg.admin(`DROP OWNED BY rls_owner`);
       await pg.admin(`DROP ROLE rls_owner`);
@@ -1876,5 +1884,17 @@ function registerSuite(pg: TestPostgres): void {
       const rows = await pg.databaseFor(service).withoutPrincipal((tx) => tx.query(`SELECT 1 FROM ${table}`));
       assert.deepEqual(rows, [], `${service} saw ${table} with no account set`);
     }
+  });
+
+  // Last on purpose: the role census at the top runs before the tests that make
+  // a temporary owner, so it cannot see one left behind.
+  test('S4: no test leaves its helper role behind, and the function owners are back as they were', async () => {
+    const leftover = await pg.admin<{ rolname: string }>(`SELECT rolname FROM pg_roles WHERE rolname = 'rls_owner'`);
+    assert.deepEqual(leftover, [], 'rls_owner was not dropped');
+    const owners = await pg.admin<{ owner: string }>(
+      `SELECT DISTINCT pg_get_userbyid(proowner) AS owner FROM pg_proc
+        WHERE oid IN ('care.lapse_details(uuid)'::regprocedure, 'ops.release_device_token(text)'::regprocedure)`,
+    );
+    assert.equal(owners.length, 1, 'the two functions no longer share an owner');
   });
 }
