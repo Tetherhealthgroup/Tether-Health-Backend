@@ -182,6 +182,6 @@ export function createServiceProxy(options: ProxyOptions): RequestHandler {
   // `http-proxy-middleware` reports its own failures through `on.error`, so the
   // promise its middleware returns carries nothing to await.
   return (req, res, next) => {
-    void proxy(req, res, next);
+    Promise.resolve(proxy(req, res, next)).catch(next);
   };
 }

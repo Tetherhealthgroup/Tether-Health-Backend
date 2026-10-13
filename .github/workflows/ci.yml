@@ -139,9 +139,16 @@ jobs:
   #
   # `supabase db reset` drops and recreates the local database and applies
   # `supabase/migrations/*.sql` in order, so a migration that does not apply
-  # cleanly from an empty database fails this job. The file-level guards the
-  # custom migration runner enforced (no BEGIN/COMMIT, ordering, and so on)
-  # live in `db/test/migrations.test.ts`, which the `check` job runs.
+  # cleanly from an empty database fails this job.
+  #
+  # Two different guards cover the two ways a migration goes wrong:
+  #
+  #   * Content rules (no BEGIN/COMMIT, ordering, and so on) are checked by
+  #     `db/test/migrations.test.ts`, which the `check` job runs.
+  #   * "A committed migration must never be edited" cannot be seen from the
+  #     files alone, because an edited file is still a valid file. The
+  #     custom runner caught it with a checksum ledger; the CLI has none, so
+  #     the first step below compares against the base commit instead.
   migrate:
     name: Migrations against a local Supabase stack
     runs-on: ubuntu-latest
@@ -154,10 +161,50 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, so the base commit and the merge base are present.
+          fetch-depth: 0
 
+      # Adding a migration is normal; modifying, deleting or renaming one that
+      # has already shipped is not. Applied migrations are history: the fix for
+      # a bad one is a new migration on top. Base commit by event:
+      #   pull_request  the PR's base sha
+      #   push          the sha the branch pointed at before this push
+      #   anything else, or a first push (all-zeros `before`), or a `before`
+      #   that a force-push removed: the merge base with the default branch.
+      - name: Existing migrations must not be modified, deleted or renamed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+          zeros=0000000000000000000000000000000000000000
+          base=""
+          case "$EVENT_NAME" in
+            pull_request) base="$PR_BASE_SHA" ;;
+            push) base="$PUSH_BEFORE" ;;
+          esac
+          if [ -z "$base" ] || [ "$base" = "$zeros" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            base=$(git merge-base HEAD "origin/$DEFAULT_BRANCH") || {
+              echo "::error::Could not determine a base commit to compare migrations against."
+              exit 1
+            }
+          fi
+          echo "Comparing against $base"
+          changed=$(git diff --name-only --diff-filter=MDR "$base"...HEAD -- supabase/migrations/)
+          if [ -n "$changed" ]; then
+            echo "::error::These existing migrations were modified, deleted or renamed. Add a new migration instead:"
+            echo "$changed"
+            exit 1
+          fi
+          echo "No existing migration was changed."
+
+      # Exact version, so a CLI release cannot turn this job red on its own.
       - uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.120.0
 
       # Starts the local containers only. No `supabase link`, no login and no
       # access token: nothing in this job can reach a hosted project.

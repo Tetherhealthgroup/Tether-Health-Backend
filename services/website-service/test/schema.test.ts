@@ -96,8 +96,10 @@ void test('a non-text optional field is stored as its text, or blank, never as [
     email: 'a@b.co',
     name: { first: 'Alex' },
     role: 42,
+    interest: ['Alex'],
   });
   assert.equal(result.success, true);
   assert.equal(result.data?.name, '');
   assert.equal(result.data?.role, '42');
+  assert.equal(result.data?.interest, '');
 });

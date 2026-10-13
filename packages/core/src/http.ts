@@ -127,16 +127,13 @@ export function requireAuth(
   verifier: Verifier,
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req, _res, next) => {
-    void (async () => {
-      try {
-        const token = bearerToken(req.header('authorization'));
-        if (!token) throw problem.unauthenticated('No bearer token.');
-        req.principal = await verifier(token);
-        next();
-      } catch (error) {
-        next(error);
-      }
-    })();
+    const authenticate = async (): Promise<void> => {
+      const token = bearerToken(req.header('authorization'));
+      if (!token) throw problem.unauthenticated('No bearer token.');
+      req.principal = await verifier(token);
+      next();
+    };
+    authenticate().catch(next);
   };
 }
 

@@ -48,7 +48,7 @@ export default tseslint.config(
   //   `no-misused-promises` stay on for tests, since a forgotten `await` there
   //   is a test that passes without asserting.
   {
-    files: ['**/test/**/*.ts'],
+    files: ['{db,packages/*,services/*}/test/**/*.ts'],
     rules: {
       '@typescript-eslint/require-await': 'off',
       '@typescript-eslint/no-explicit-any': 'off',

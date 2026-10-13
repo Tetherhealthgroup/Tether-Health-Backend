@@ -11,3 +11,5 @@ coverage/
 secrets/
 *.p8
 *.pem
+# Local CLI scratch state.
+supabase/.temp/

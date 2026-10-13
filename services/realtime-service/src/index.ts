@@ -202,9 +202,9 @@ start({
   serviceName: config.SERVICE_NAME,
   logger,
   onShutdown: async () => {
-    // Forget the subscribers; `start`'s drain window ends the sockets. There
-    // used to be a `subscriber.send.length` statement here that read as though
-    // it closed each stream and did nothing. `Subscriber` has no close hook.
+    // Forget the subscribers. This does not close their streams: `Subscriber`
+    // has no close hook, so open SSE responses are left to the process exit.
+    // (A `subscriber.send.length` statement used to sit here and did nothing.)
     subscribers.clear();
     await listener.end().catch(() => undefined);
     await db.close();
