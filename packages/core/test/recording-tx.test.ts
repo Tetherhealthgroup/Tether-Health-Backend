@@ -49,7 +49,7 @@ test('a statement that does not receive the account at all is rejected', () => {
 test('$1 is not mistaken for $10', () => {
   assert.throws(() =>
     assertScopedTo(
-      { sql: 'SELECT 1 WHERE account_id = $10', params: [ACCOUNT, ...Array(9).fill('x'), 'y'] },
+      { sql: 'SELECT 1 WHERE account_id = $10', params: [ACCOUNT, ...Array<string>(9).fill('x'), 'y'] },
       'account_id',
       ACCOUNT,
     ),

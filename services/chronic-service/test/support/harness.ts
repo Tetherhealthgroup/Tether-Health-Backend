@@ -27,12 +27,8 @@ export const ACCOUNT = '11111111-1111-4111-8111-111111111111';
 export const PROFILE = '99999999-9999-4999-8999-999999999999';
 export const CONDITION = '33333333-3333-4333-8333-333333333333';
 
-const fakeVerifier: Verifier = async (token: string): Promise<Principal> => ({
-  accountId: token,
-  roles: [],
-  scopes: [],
-  claims: { sub: token },
-});
+const fakeVerifier: Verifier = (token: string): Promise<Principal> =>
+  Promise.resolve({ accountId: token, roles: [], scopes: [], claims: { sub: token } });
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -146,8 +142,8 @@ export async function startHarness(
       }
     },
     withoutPrincipal: () => Promise.reject(new Error('chronic-service never opens a principal-less transaction')),
-    ping: async () => true,
-    close: async () => {},
+    ping: () => Promise.resolve(true),
+    close: () => Promise.resolve(),
   };
 
   const config = loadConfig(

@@ -33,14 +33,14 @@ const PATIENT = '22222222-2222-4222-8222-222222222222';
 const ENQUIRY = '99999999-9999-4999-8999-999999999999';
 
 /** `admin-token` and `patient-token` verify; anything else is a bad token. */
-const verifier: Verifier = async (token: string): Promise<Principal> => {
+const verifier: Verifier = (token: string): Promise<Principal> => {
   if (token === 'admin-token') {
-    return { accountId: ADMIN, roles: ['admin'], scopes: [], claims: { sub: ADMIN } };
+    return Promise.resolve({ accountId: ADMIN, roles: ['admin'], scopes: [], claims: { sub: ADMIN } });
   }
   if (token === 'patient-token') {
-    return { accountId: PATIENT, roles: ['patient'], scopes: [], claims: { sub: PATIENT } };
+    return Promise.resolve({ accountId: PATIENT, roles: ['patient'], scopes: [], claims: { sub: PATIENT } });
   }
-  throw problem.unauthenticated('The token did not verify.');
+  return Promise.reject(problem.unauthenticated('The token did not verify.'));
 };
 
 interface Running {
@@ -66,8 +66,8 @@ async function start(): Promise<Running> {
       }
     },
     withPrincipal: () => Promise.reject(new Error('website-service never scopes to an account')),
-    ping: async () => true,
-    close: async () => {},
+    ping: () => Promise.resolve(true),
+    close: () => Promise.resolve(),
   };
 
   const config = loadConfig(

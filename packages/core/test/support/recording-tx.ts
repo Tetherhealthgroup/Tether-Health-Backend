@@ -37,17 +37,17 @@ export function recordingTransaction(
 
   return {
     statements,
-    async query<R extends QueryResultRow = QueryResultRow>(
+    query<R extends QueryResultRow = QueryResultRow>(
       sql: string,
       params: readonly unknown[] = [],
     ): Promise<R[]> {
-      return answer(sql, params) as R[];
+      return Promise.resolve(answer(sql, params) as R[]);
     },
-    async one<R extends QueryResultRow = QueryResultRow>(
+    one<R extends QueryResultRow = QueryResultRow>(
       sql: string,
       params: readonly unknown[] = [],
     ): Promise<R | null> {
-      return (answer(sql, params)[0] as R | undefined) ?? null;
+      return Promise.resolve((answer(sql, params)[0] as R | undefined) ?? null);
     },
   };
 }
