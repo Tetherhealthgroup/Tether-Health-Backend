@@ -1,5 +1,5 @@
 import rateLimit from 'express-rate-limit';
-import type { Express } from 'express';
+import type { Express, RequestHandler } from 'express';
 import type { z } from 'zod';
 import {
   createApp,
@@ -59,6 +59,20 @@ export function createWebsiteApp(deps: WebsiteDeps): Express {
   const { config, logger, verifier, db } = deps;
 
   const app = createApp({ config, logger, verifier });
+
+  /**
+   * `requireAuth` from `@tether/core`, as a handler that returns `void`.
+   *
+   * `requireAuth` is an `async` function, and Express's handler type expects
+   * `void` (`@typescript-eslint/no-misused-promises`). It already routes its own
+   * failures to `next`, so it does not reject in practice; the `.catch(next)` is
+   * the explicit statement of what happens if it ever does (the error handler
+   * answers, and a rejection is never left unhandled). Behaviour is unchanged.
+   */
+  const verifyToken = requireAuth(verifier);
+  const requireToken: RequestHandler = (req, res, next) => {
+    verifyToken(req, res, next).catch(next);
+  };
 
   /**
    * A second, much stricter limiter on top of the service-wide one.
@@ -157,7 +171,7 @@ export function createWebsiteApp(deps: WebsiteDeps): Express {
    */
   app.delete(
     '/waitlist/:id',
-    requireAuth(verifier),
+    requireToken,
     requireRole(config.ADMIN_ROLE),
     handler(async (req, res) => {
       const principal = principalOf(req);
@@ -209,7 +223,7 @@ export function createWebsiteApp(deps: WebsiteDeps): Express {
    */
   app.post(
     '/waitlist/purge',
-    requireAuth(verifier),
+    requireToken,
     requireRole(config.ADMIN_ROLE),
     handler(async (req, res) => {
       const principal = principalOf(req);

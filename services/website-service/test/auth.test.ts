@@ -220,3 +220,23 @@ test('the form is still public, and the retention purge is still admin only', as
     await server.close();
   }
 });
+
+test('S2: a token that fails to verify is answered by the error handler, on both admin routes, with no unhandled rejection', async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  const server = await start();
+  try {
+    assert.equal(await call(server, 'DELETE', `/waitlist/${ENQUIRY}`, { token: 'forged' }), 401);
+    assert.equal(await call(server, 'POST', '/waitlist/purge', { token: 'forged' }), 401);
+    assert.equal(server.statements.length, 0, 'the database was reached without a verified token');
+    // Give a stray rejection the tick it would need to surface.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    await server.close();
+  }
+});
