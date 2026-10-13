@@ -18,10 +18,18 @@ import { ceilingFromRule, liveConsents, type ActiveProgramme } from './rules.ts'
  *
  * All of it goes through a transaction opened by `db.withPrincipal`, so
  * `app.account_id` is set and the RLS policies in
- * `0003_programme_and_record.sql` apply. None of the SQL below carries its own
- * `WHERE account_id = …` for the enrolment table, and that is not an oversight:
- * the policy is the filter, and writing the predicate by hand as well would
- * make a query that forgot it look no different from one that did not.
+ * `0003_programme_and_record.sql` apply.
+ *
+ * Every statement also names the account itself. That used to be left to the
+ * policy alone, on the reasoning that a hand-written predicate beside a policy
+ * is redundant, and the reasoning was wrong for a reason `0005_care.sql`
+ * supplied: `programme.enrolment` and `programme.sharing_consent` are readable
+ * by a *recipient* as well as by their owner. An account that is both a patient
+ * and a clinician sees other people's shared enrolments through the recipient
+ * policy, so a query with no predicate of its own would list them as that
+ * account's own programmes — and `tx.one` on `WHERE area_id = $1` would throw
+ * the moment two of them matched. The policy remains the backstop; the
+ * predicate says what the query means.
  *
  * Columns are aliased to their wire names in SQL for the same reason as in the
  * catalogue service — a hand-written mapper is a place a field goes missing.
@@ -115,6 +123,16 @@ const CONSENT_COLUMNS = `
   revoked_at       AS "revokedAt"
 `;
 
+/**
+ * "This enrolment belongs to this account", as a predicate.
+ *
+ * `column` and `account` are SQL fragments written in this file — a column name
+ * and a bind placeholder — never input.
+ */
+const OWNS_ENROLMENT = (column: string, account: string): string =>
+  `EXISTS (SELECT 1 FROM programme.enrolment own
+            WHERE own.id = ${column} AND own.account_id = ${account})`;
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
@@ -128,6 +146,7 @@ const CONSENT_COLUMNS = `
  */
 async function loadConsentRows(
   tx: Transaction,
+  accountId: string,
   enrolmentIds: readonly string[],
 ): Promise<SharingConsent[]> {
   if (enrolmentIds.length === 0) return [];
@@ -135,20 +154,29 @@ async function loadConsentRows(
     `SELECT ${CONSENT_COLUMNS}
        FROM programme.sharing_consent
       WHERE enrolment_id = ANY($1)
+        AND ${OWNS_ENROLMENT('enrolment_id', '$2')}
       ORDER BY granted_at, id`,
-    [enrolmentIds],
+    [enrolmentIds, accountId],
   );
   return rows.map(toConsent);
 }
 
-export async function loadEnrolments(tx: Transaction): Promise<Enrolment[]> {
+export async function loadEnrolments(
+  tx: Transaction,
+  accountId: string,
+): Promise<Enrolment[]> {
   const rows = await tx.query<EnrolmentRow>(
-    `SELECT ${ENROLMENT_COLUMNS} FROM programme.enrolment ORDER BY joined_on, area_id`,
+    `SELECT ${ENROLMENT_COLUMNS}
+       FROM programme.enrolment
+      WHERE account_id = $1
+      ORDER BY joined_on, area_id`,
+    [accountId],
   );
   if (rows.length === 0) return [];
 
   const consents = await loadConsentRows(
     tx,
+    accountId,
     rows.map((row) => row.id),
   );
 
@@ -162,39 +190,46 @@ export async function loadEnrolments(tx: Transaction): Promise<Enrolment[]> {
 
 export async function loadEnrolmentRow(
   tx: Transaction,
+  accountId: string,
   areaId: string,
 ): Promise<EnrolmentRow | null> {
   return tx.one<EnrolmentRow>(
-    `SELECT ${ENROLMENT_COLUMNS} FROM programme.enrolment WHERE area_id = $1`,
-    [areaId],
+    `SELECT ${ENROLMENT_COLUMNS}
+       FROM programme.enrolment
+      WHERE account_id = $1 AND area_id = $2`,
+    [accountId, areaId],
   );
 }
 
 export async function loadEnrolment(
   tx: Transaction,
+  accountId: string,
   areaId: string,
 ): Promise<Enrolment | null> {
-  const row = await loadEnrolmentRow(tx, areaId);
+  const row = await loadEnrolmentRow(tx, accountId, areaId);
   if (!row) return null;
-  return toEnrolment(row, await loadConsentRows(tx, [row.id]));
+  return toEnrolment(row, await loadConsentRows(tx, accountId, [row.id]));
 }
 
 /** All consents on one enrolment, revoked included. See [loadConsentRows]. */
 export async function loadConsents(
   tx: Transaction,
+  accountId: string,
   enrolmentId: string,
 ): Promise<SharingConsent[]> {
-  return loadConsentRows(tx, [enrolmentId]);
+  return loadConsentRows(tx, accountId, [enrolmentId]);
 }
 
 export async function loadActiveProgrammes(
   tx: Transaction,
+  accountId: string,
 ): Promise<ActiveProgramme[]> {
   const rows = await tx.query<{ areaId: string; joinedOn: Date | string }>(
     `SELECT area_id AS "areaId", joined_on AS "joinedOn"
        FROM programme.enrolment
-      WHERE status = 'active'
+      WHERE account_id = $1 AND status = 'active'
       ORDER BY joined_on`,
+    [accountId],
   );
   return rows.map((row) => ({
     areaId: row.areaId,
@@ -262,30 +297,32 @@ export async function insertEnrolment(
  */
 export async function setStatus(
   tx: Transaction,
+  accountId: string,
   areaId: string,
   status: EnrolmentStatus,
 ): Promise<EnrolmentRow | null> {
   return tx.one<EnrolmentRow>(
     `UPDATE programme.enrolment
-        SET status   = $2::text,
-            ended_at = CASE WHEN $2::text = 'ended' THEN now() ELSE NULL END
-      WHERE area_id = $1
+        SET status   = $3::text,
+            ended_at = CASE WHEN $3::text = 'ended' THEN now() ELSE NULL END
+      WHERE account_id = $1 AND area_id = $2
       RETURNING ${ENROLMENT_COLUMNS}`,
-    [areaId, status],
+    [accountId, areaId, status],
   );
 }
 
 export async function setHidden(
   tx: Transaction,
+  accountId: string,
   areaId: string,
   hidden: boolean,
 ): Promise<EnrolmentRow | null> {
   return tx.one<EnrolmentRow>(
     `UPDATE programme.enrolment
-        SET hidden = $2
-      WHERE area_id = $1
+        SET hidden = $3
+      WHERE account_id = $1 AND area_id = $2
       RETURNING ${ENROLMENT_COLUMNS}`,
-    [areaId, hidden],
+    [accountId, areaId, hidden],
   );
 }
 
@@ -308,6 +345,7 @@ export interface GrantInput {
  */
 export async function revokeLive(
   tx: Transaction,
+  accountId: string,
   input: {
     readonly enrolmentId: string;
     readonly scope: SharingScope;
@@ -323,8 +361,15 @@ export async function revokeLive(
         AND recipient_kind = $3
         AND recipient_id IS NOT DISTINCT FROM $4
         AND revoked_at IS NULL
+        AND ${OWNS_ENROLMENT('enrolment_id', '$5')}
       RETURNING id`,
-    [input.enrolmentId, input.scope, input.recipientKind, input.recipientId],
+    [
+      input.enrolmentId,
+      input.scope,
+      input.recipientKind,
+      input.recipientId,
+      accountId,
+    ],
   );
   return rows.map((row) => row.id);
 }
@@ -342,6 +387,7 @@ export async function revokeLive(
  */
 export async function grantConsent(
   tx: Transaction,
+  accountId: string,
   input: GrantInput,
 ): Promise<{ consent: SharingConsent; supersededIds: string[]; created: boolean }> {
   const existing = await tx.one<ConsentRow>(
@@ -351,8 +397,15 @@ export async function grantConsent(
         AND scope          = $2
         AND recipient_kind = $3
         AND recipient_id IS NOT DISTINCT FROM $4
-        AND revoked_at IS NULL`,
-    [input.enrolmentId, input.scope, input.recipientKind, input.recipientId],
+        AND revoked_at IS NULL
+        AND ${OWNS_ENROLMENT('enrolment_id', '$5')}`,
+    [
+      input.enrolmentId,
+      input.scope,
+      input.recipientKind,
+      input.recipientId,
+      accountId,
+    ],
   );
 
   if (existing && existing.consentVersion === input.consentVersion) {
@@ -360,7 +413,7 @@ export async function grantConsent(
   }
 
   const supersededIds = existing
-    ? await revokeLive(tx, {
+    ? await revokeLive(tx, accountId, {
         enrolmentId: input.enrolmentId,
         scope: input.scope,
         recipientKind: input.recipientKind,
@@ -368,10 +421,15 @@ export async function grantConsent(
       })
     : [];
 
+  // Inserted *from* the enrolment, so a consent can only be written against an
+  // enrolment this account owns: the row simply is not produced otherwise, and
+  // the `RETURNING` below comes back empty.
   const row = await tx.one<ConsentRow>(
     `INSERT INTO programme.sharing_consent
        (enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     SELECT e.id, $2, $3, $4, $5, $6
+       FROM programme.enrolment e
+      WHERE e.id = $1 AND e.account_id = $7
      RETURNING ${CONSENT_COLUMNS}`,
     [
       input.enrolmentId,
@@ -380,6 +438,7 @@ export async function grantConsent(
       input.recipientId,
       input.consentVersion,
       input.consentText,
+      accountId,
     ],
   );
   if (!row) throw new Error('consent insert returned no row');
@@ -437,6 +496,7 @@ interface NoteRow {
 
 export async function loadPreviewSource(
   tx: Transaction,
+  accountId: string,
   enrolment: EnrolmentRow,
   areaName: string,
 ): Promise<PreviewSource> {
@@ -452,22 +512,25 @@ export async function loadPreviewSource(
        FROM record.observation o
        JOIN catalogue.measure m ON m.id = o.measure_id
       WHERE o.enrolment_id = $1
+        AND ${OWNS_ENROLMENT('o.enrolment_id', '$2')}
       GROUP BY o.measure_id, m.label, o.unit
       ORDER BY o.measure_id`,
-    [enrolment.id],
+    [enrolment.id, accountId],
   );
 
   const answers = await tx.one<{ count: number }>(
-    `SELECT count(*)::int AS count FROM record.screen_answer WHERE enrolment_id = $1`,
-    [enrolment.id],
+    `SELECT count(*)::int AS count
+       FROM record.screen_answer
+      WHERE enrolment_id = $1 AND ${OWNS_ENROLMENT('enrolment_id', '$2')}`,
+    [enrolment.id, accountId],
   );
 
   const lapses = await tx.query<{ occurredAt: Date | string }>(
     `SELECT occurred_at AS "occurredAt"
        FROM record.lapse_event
-      WHERE enrolment_id = $1
+      WHERE enrolment_id = $1 AND ${OWNS_ENROLMENT('enrolment_id', '$2')}
       ORDER BY occurred_at DESC`,
-    [enrolment.id],
+    [enrolment.id, accountId],
   );
 
   const noteRows = await tx.query<NoteRow>(
@@ -477,8 +540,9 @@ export async function loadPreviewSource(
             answered_at AS "answeredAt"
        FROM record.screen_answer
       WHERE enrolment_id = $1 AND kind = 'text'
+        AND ${OWNS_ENROLMENT('enrolment_id', '$2')}
       ORDER BY answered_at, screen_id, block_index`,
-    [enrolment.id],
+    [enrolment.id, accountId],
   );
 
   return {

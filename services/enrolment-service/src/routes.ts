@@ -123,7 +123,9 @@ export function enrolmentRoutes(options: RouteOptions): Router {
     ...guarded,
     handler(async (req, res) => {
       const { accountId } = principalOf(req);
-      const enrolments = await db.withPrincipal(accountId, loadEnrolments);
+      const enrolments = await db.withPrincipal(accountId, (tx) =>
+        loadEnrolments(tx, accountId),
+      );
       res.json({ enrolments });
     }),
   );
@@ -161,7 +163,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
             throw problem.areaNotImplemented(body.areaId);
           }
 
-          const active = await loadActiveProgrammes(tx);
+          const active = await loadActiveProgrammes(tx, accountId);
 
           if (body.pausing !== undefined) {
             if (body.pausing === body.areaId) {
@@ -196,7 +198,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
           // precisely so this sequence is legal: it is only checked once, at
           // COMMIT, by which point the count is right.
           if (body.pausing !== undefined) {
-            const paused = await setStatus(tx, body.pausing, 'paused');
+            const paused = await setStatus(tx, accountId, body.pausing, 'paused');
             if (paused) {
               await writeAudit(tx, req, {
                 action: 'programme.pause',
@@ -211,7 +213,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
           // `UNIQUE (account_id, area_id)` — re-joining reuses the row, which
           // is what keeps history across a pause and resume and what stops a
           // second join quietly orphaning the first one's record.
-          const existing = await loadEnrolmentRow(tx, body.areaId);
+          const existing = await loadEnrolmentRow(tx, accountId, body.areaId);
 
           let row = existing;
           let joined = false;
@@ -224,7 +226,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
             // the row moved out from under this transaction, and reporting the
             // stale row as the result would tell the person they had joined and
             // write an audit event saying so.
-            row = await setStatus(tx, body.areaId, 'active');
+            row = await setStatus(tx, accountId, body.areaId, 'active');
             joined = true;
           }
 
@@ -247,7 +249,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
 
           return {
             joined,
-            enrolment: toEnrolment(row, await loadConsents(tx, row.id)),
+            enrolment: toEnrolment(row, await loadConsents(tx, accountId, row.id)),
           };
         }),
       );
@@ -273,7 +275,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
 
       const enrolment = await withCeilingTranslation(hint, () =>
         db.withPrincipal(accountId, async (tx) => {
-          const existing = await loadEnrolmentRow(tx, areaId);
+          const existing = await loadEnrolmentRow(tx, accountId, areaId);
           if (!existing) {
             throw problem.notFound(`You have no enrolment in \`${areaId}\`.`);
           }
@@ -283,7 +285,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
           // around a rule the join screen enforces.
           if (body.status === 'active' && existing.status !== 'active') {
             const check = checkCeiling({
-              active: await loadActiveProgrammes(tx),
+              active: await loadActiveProgrammes(tx, accountId),
               areaId,
               ceiling: await loadActiveCeiling(tx),
             });
@@ -296,7 +298,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
           if (body.status !== undefined && body.status !== existing.status) {
             // As in the join: an UPDATE that matched nothing is not a success
             // with the old values, it is a row that is no longer there.
-            const updated = await setStatus(tx, areaId, body.status);
+            const updated = await setStatus(tx, accountId, areaId, body.status);
             if (!updated) throw problem.internal('enrolment vanished mid-update');
             row = updated;
             await writeAudit(tx, req, {
@@ -312,12 +314,12 @@ export function enrolmentRoutes(options: RouteOptions): Router {
             // Hidden is not paused: the programme still runs, still takes
             // check-ins and still counts against the ceiling. No status
             // transition, and so no status audit event.
-            const updated = await setHidden(tx, areaId, body.hidden);
+            const updated = await setHidden(tx, accountId, areaId, body.hidden);
             if (!updated) throw problem.internal('enrolment vanished mid-update');
             row = updated;
           }
 
-          return toEnrolment(row, await loadConsents(tx, row.id));
+          return toEnrolment(row, await loadConsents(tx, accountId, row.id));
         }),
       );
 
@@ -336,14 +338,14 @@ export function enrolmentRoutes(options: RouteOptions): Router {
       const areaId = areaParam(req);
 
       const response = await db.withPrincipal(accountId, async (tx) => {
-        const enrolment = await loadEnrolmentRow(tx, areaId);
+        const enrolment = await loadEnrolmentRow(tx, accountId, areaId);
         if (!enrolment) {
           throw problem.notFound(`You have no enrolment in \`${areaId}\`.`);
         }
         return {
           areaId,
           enrolmentId: enrolment.id,
-          consents: liveConsents(await loadConsents(tx, enrolment.id)),
+          consents: liveConsents(await loadConsents(tx, accountId, enrolment.id)),
         };
       });
 
@@ -367,7 +369,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
       const recipientId = body.recipientId ?? null;
 
       const response = await db.withPrincipal(accountId, async (tx) => {
-        const enrolment = await loadEnrolmentRow(tx, areaId);
+        const enrolment = await loadEnrolmentRow(tx, accountId, areaId);
         if (!enrolment) {
           // A consent that names no programme is not representable, so a
           // consent for a programme somebody is not in is not either.
@@ -375,7 +377,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
         }
 
         if (body.granted) {
-          const { consent, supersededIds, created } = await grantConsent(tx, {
+          const { consent, supersededIds, created } = await grantConsent(tx, accountId, {
             enrolmentId: enrolment.id,
             scope: body.scope,
             recipientKind: body.recipientKind,
@@ -417,7 +419,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
             });
           }
         } else {
-          const revokedIds = await revokeLive(tx, {
+          const revokedIds = await revokeLive(tx, accountId, {
             enrolmentId: enrolment.id,
             scope: body.scope,
             recipientKind: body.recipientKind,
@@ -443,7 +445,7 @@ export function enrolmentRoutes(options: RouteOptions): Router {
         return {
           areaId,
           enrolmentId: enrolment.id,
-          consents: liveConsents(await loadConsents(tx, enrolment.id)),
+          consents: liveConsents(await loadConsents(tx, accountId, enrolment.id)),
         };
       });
 
@@ -469,16 +471,21 @@ export function enrolmentRoutes(options: RouteOptions): Router {
           : null;
 
       const entries = await db.withPrincipal(accountId, async (tx) => {
-        const enrolment = await loadEnrolmentRow(tx, areaId);
+        const enrolment = await loadEnrolmentRow(tx, accountId, areaId);
         if (!enrolment) {
           throw problem.notFound(`You have no enrolment in \`${areaId}\`.`);
         }
 
         const area = await loadArea(tx, areaId);
-        const source = await loadPreviewSource(tx, enrolment, area?.name ?? areaId);
+        const source = await loadPreviewSource(
+          tx,
+          accountId,
+          enrolment,
+          area?.name ?? areaId,
+        );
 
         return previewEntries({
-          consents: await loadConsents(tx, enrolment.id),
+          consents: await loadConsents(tx, accountId, enrolment.id),
           prospective,
           source,
         });

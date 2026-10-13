@@ -26,12 +26,20 @@ type DeviceRow = { id: string; created_at: Date; last_seen_at: Date };
  * app, keeps the same FCM token, and a per-account upsert would leave the old
  * row in place and push to both people. Re-registering transfers ownership,
  * which is the only outcome that is not a disclosure.
+ *
+ * Under RLS the previous owner's row is not visible to the new account, so the
+ * upsert alone cannot transfer it: `ops.release_device_token` (0010, section 6)
+ * removes the row that holds this token for any *other* account first. It is
+ * the one statement here that touches a row the caller does not own, and it is
+ * a function rather than a grant so that it can do exactly that and no more.
  */
 export async function registerDevice(
   tx: Transaction,
   accountId: string,
   device: DeviceRegistration,
 ): Promise<{ id: string; createdAt: Date }> {
+  await tx.query('SELECT ops.release_device_token($1)', [device.token]);
+
   const rows = await tx.query<DeviceRow>(
     `
     INSERT INTO ops.device_token (account_id, token, platform, area_id)

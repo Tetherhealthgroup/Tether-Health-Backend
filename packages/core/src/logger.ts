@@ -1,4 +1,10 @@
-import { pino, type Logger } from 'pino';
+import {
+  pino,
+  stdSerializers,
+  type DestinationStream,
+  type Logger,
+  type LoggerOptions as PinoOptions,
+} from 'pino';
 
 /**
  * One logger, one configuration.
@@ -41,7 +47,51 @@ const REDACTED = [
   '*.note',
   '*.severity',
   '*.recipient',
+  // What was measured, and what it was called. A metric key such as a blood
+  // glucose or a peak-flow reading names a condition, so it is health data
+  // before any value is attached to it.
+  '*.metricKey',
+  '*.metric_key',
+  '*.measureId',
+  '*.measure_id',
+  '*.value_num',
+  '*.value_text',
+  '*.dosage',
+  '*.conditionKind',
 ];
+
+/**
+ * Database fields that carry row contents.
+ *
+ * `pg` attaches `detail` ("Failing row contains (…)", "Key (email)=(…) already
+ * exists"), `where` and `hint` to the errors it throws, and pino's default `err`
+ * serializer copies every own property of an error into the line. A check
+ * violation on a vital reading would therefore log the reading, its metric key
+ * and the person's note. Stripped here for every service, so no handler has to
+ * remember it.
+ */
+const ROW_BEARING_ERROR_FIELDS = [
+  'detail',
+  'where',
+  'hint',
+  'internalQuery',
+  'internalPosition',
+  'parameters',
+] as const;
+
+/**
+ * pino's standard error serializer, minus anything that can hold a row.
+ *
+ * Exported so a test can assert on the serializer directly rather than through
+ * a log line.
+ */
+export function serializeError(error: unknown): unknown {
+  const serialised = stdSerializers.err(error as Error) as unknown as Record<string, unknown>;
+  for (const field of ROW_BEARING_ERROR_FIELDS) {
+    delete serialised[field];
+  }
+  return serialised;
+}
 
 export interface LoggerOptions {
   readonly serviceName: string;
@@ -49,23 +99,29 @@ export interface LoggerOptions {
   readonly environment: string;
   /** Pretty-print. Never in production — the collector wants JSON. */
   readonly pretty?: boolean;
+  /**
+   * Where lines go. Left unset in every service, which writes to stdout; a test
+   * passes a stream so it can read back exactly what would have been shipped.
+   */
+  readonly destination?: DestinationStream;
 }
 
 export function createLogger(options: LoggerOptions): Logger {
-  return pino({
+  const config: PinoOptions = {
     level: options.level,
     base: {
       service: options.serviceName,
       env: options.environment,
     },
     redact: { paths: REDACTED, censor: '[REDACTED]' },
+    serializers: { err: serializeError },
     // Milliseconds since epoch rather than pino's default, so log time and
     // database `timestamptz` compare without anybody converting.
     timestamp: () => `,"time":${Date.now()}`,
     formatters: {
       level: (label) => ({ level: label }),
     },
-    ...(options.pretty
+    ...(options.pretty && !options.destination
       ? {
           transport: {
             target: 'pino-pretty',
@@ -73,7 +129,9 @@ export function createLogger(options: LoggerOptions): Logger {
           },
         }
       : {}),
-  });
+  };
+
+  return options.destination ? pino(config, options.destination) : pino(config);
 }
 
 export type { Logger };

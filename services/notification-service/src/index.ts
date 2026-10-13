@@ -329,9 +329,12 @@ app.post(
     // service is not "redact the body", it is that no code path ever puts the
     // body in a log object; `render`'s output goes to `pusher.send` and
     // nowhere else.
+    // No `kind`, either. `lapse_support` and `medication_reminder` say something
+    // true about a person's health, and a log index is read by people with no
+    // clinical relationship to them. The kind is in `ops.notification_log`,
+    // under RLS, which is where an incident reader should look for it.
     req.log.info(
       {
-        kind: input.kind,
         variant: prepared.rendered.variant,
         devices: prepared.tokens.length,
         delivered: outcome.delivered,

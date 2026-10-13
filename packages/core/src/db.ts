@@ -21,6 +21,27 @@ import type { Logger } from './logger.ts';
  * an empty set rather than another patient's record.
  */
 
+const ACCOUNT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Refuses anything that is not a UUID before it reaches `app.account_id`.
+ *
+ * Every policy reads the setting through `app_account_id()`, which casts it to
+ * `uuid`. A value that does not cast makes that call raise on every statement,
+ * which fails closed but reads as a database fault, and a value that is empty
+ * silently turns the transaction into a principal-less one that matches no
+ * patient row. Both are better stopped here, with a message that names the
+ * cause, than discovered from a policy error three queries later.
+ *
+ * The value is never echoed: a malformed subject is attacker-controlled text.
+ */
+export function assertAccountId(accountId: string): string {
+  if (!ACCOUNT_ID.test(accountId)) {
+    throw new Error('principal account id is not a uuid; refusing to open a scoped transaction');
+  }
+  return accountId.toLowerCase();
+}
+
 export interface DatabaseOptions {
   readonly connectionString: string;
   readonly max: number;
@@ -125,7 +146,7 @@ export function createDatabase(options: DatabaseOptions): Database {
   }
 
   return {
-    withPrincipal: (accountId, fn) => run(accountId, fn),
+    withPrincipal: (accountId, fn) => run(assertAccountId(accountId), fn),
     withoutPrincipal: (fn) => run(null, fn),
 
     async ping() {
