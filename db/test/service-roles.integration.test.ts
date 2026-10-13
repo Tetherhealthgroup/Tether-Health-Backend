@@ -49,6 +49,7 @@ import { createPostgresStore as createRecordsStore } from '../../services/record
 import { writeAudit as writeRecordsAudit } from '../../services/records-service/src/audit.ts';
 import { deleteEnquiry, purgeExpired, recordEnquiry } from '../../services/website-service/src/waitlist.ts';
 import {
+  PRE_EXISTING,
   SERVICES,
   groupRole,
   loginRole,
@@ -205,6 +206,14 @@ async function failsWith(work: Promise<unknown>): Promise<string | null> {
 }
 
 const PERMISSION_DENIED = '42501';
+
+/**
+ * A probe holding every privilege, so that the only thing between it and a row is
+ * a policy. It is a member of `tether_care_team` because the recipient policies
+ * are `TO tether_care_team`: a probe that was not would never see them apply.
+ * Created here, never by a migration.
+ */
+const PROBE_SQL = `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN IN ROLE tether_care_team; END IF; END $$`;
 
 const ids = (rows: readonly Row[], column = 'id'): string[] =>
   rows.map((row) => String(row[column])).sort();
@@ -581,6 +590,51 @@ function registerSuite(pg: TestPostgres): void {
   // Policies that could not run under a superuser
   // -------------------------------------------------------------------------
 
+  test('0010 backfills owner_account_id on rows that existed before it, and puts FORCE back', async () => {
+    // Seeded by applyMigrations before 0010 ran. Must run before any test truncates.
+    const [row] = await pg.admin<{ owner_account_id: string }>(
+      `SELECT owner_account_id FROM programme.sharing_consent WHERE id = $1`,
+      [PRE_EXISTING.consent],
+    );
+    assert.equal(row?.owner_account_id, PRE_EXISTING.account, 'the backfill did not run, or ran wrong');
+
+    const forced = await pg.admin<{ relname: string; relforcerowsecurity: boolean; relrowsecurity: boolean }>(
+      `SELECT c.relname, c.relforcerowsecurity, c.relrowsecurity
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'programme' AND c.relname IN ('enrolment', 'sharing_consent')`,
+    );
+    assert.equal(forced.length, 2);
+    for (const table of forced) {
+      assert.equal(table.relrowsecurity, true, `${table.relname}: RLS lost`);
+      assert.equal(table.relforcerowsecurity, true, `${table.relname}: FORCE was not restored after the backfill`);
+    }
+    const [nullable] = await pg.admin<{ is_nullable: string }>(
+      `SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema = 'programme' AND table_name = 'sharing_consent' AND column_name = 'owner_account_id'`,
+    );
+    assert.equal(nullable?.is_nullable, 'NO');
+  });
+
+  test('the SECURITY DEFINER functions run with an empty search_path and are not executable by the API roles', async () => {
+    const functions = await pg.admin<{ name: string; config: string[] | null }>(
+      `SELECT n.nspname || '.' || p.proname AS name, p.proconfig AS config
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE p.prosecdef AND n.nspname IN ('care', 'ops', 'programme', 'record')
+        ORDER BY 1`,
+    );
+    const mine = functions.filter((f) => ['care.lapse_details', 'ops.release_device_token', 'programme.notify_consent_change'].includes(f.name));
+    assert.equal(mine.length, 3);
+    for (const fn of mine) {
+      assert.ok(fn.config?.some((c) => /^search_path=("")?$/.test(c)), `${fn.name} does not pin an empty search_path (${String(fn.config)})`);
+    }
+    for (const apiRole of ['anon', 'authenticated']) {
+      for (const fn of ['care.lapse_details(uuid)', 'ops.release_device_token(text)', 'programme.notify_consent_change()']) {
+        const [row] = await pg.admin<{ ok: boolean }>(`SELECT has_function_privilege($1, $2::regprocedure, 'EXECUTE') AS ok`, [apiRole, fn]);
+        assert.equal(row?.ok, false, `${apiRole} can execute ${fn}`);
+      }
+    }
+  });
+
   test('R-032: the enrolment/consent policies evaluate for a role that is subject to them', async () => {
     // Before 0010 every one of these raised 42P17, "infinite recursion detected
     // in policy". A superuser never evaluates policies, so nothing had noticed.
@@ -642,10 +696,17 @@ function registerSuite(pg: TestPostgres): void {
     await seed(pg);
     const db = pg.databaseFor('enrolment');
 
+    // enrolment-service does not get the recipient policy at all (R-060)...
     const unqualified = await db.withPrincipal(CLIN, (tx) =>
       tx.query<{ id: string }>(`SELECT id FROM programme.enrolment`),
     );
-    assert.deepEqual(ids(unqualified), [ENR_A, ENR_C].sort(), 'the recipient policy no longer widens the read (the premise of this test)');
+    assert.deepEqual(ids(unqualified), [ENR_C], 'enrolment-service received a recipient-scoped row');
+
+    // ...care-team does, which is why its own statements must name the consent.
+    const clinicianSurface = await pg.databaseFor('care_team').withPrincipal(CLIN, (tx) =>
+      tx.query<{ id: string }>(`SELECT id FROM programme.enrolment`),
+    );
+    assert.deepEqual(ids(clinicianSurface), [ENR_A, ENR_C].sort(), 'the recipient policy no longer widens care-team\'s read');
 
     assert.deepEqual(
       (await db.withPrincipal(CLIN, (tx) => loadEnrolments(tx, CLIN))).map((e) => e.id),
@@ -771,7 +832,7 @@ function registerSuite(pg: TestPostgres): void {
     // A probe role holding every privilege, so the only thing between it and a
     // row is the policy. Created here, never by a migration.
     await seed(pg);
-    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$`);
+    await pg.admin(PROBE_SQL);
     await pg.admin(`GRANT USAGE ON SCHEMA identity, programme, record, care, ops, catalogue TO rls_probe`);
     await pg.admin(`GRANT ALL ON ALL TABLES IN SCHEMA identity, programme, record, care, ops, catalogue TO rls_probe`);
 
@@ -910,7 +971,7 @@ function registerSuite(pg: TestPostgres): void {
     }
 
     // And at the policy layer, with every privilege in hand: still nothing.
-    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$`);
+    await pg.admin(PROBE_SQL);
     await pg.admin(`GRANT USAGE ON SCHEMA programme, care TO rls_probe`);
     await pg.admin(`GRANT ALL ON ALL TABLES IN SCHEMA programme, care TO rls_probe`);
     const probed = await pg.asRole('rls_probe', CLIN, async (tx) => ({
@@ -963,6 +1024,184 @@ function registerSuite(pg: TestPostgres): void {
     await db.withPrincipal(A, (tx) => tx.query(`DELETE FROM ops.audit_event`));
     assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event WHERE action = 'x'`), 0, 'an audit row was edited');
     assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event`), before, 'an audit row was deleted');
+  });
+
+  test('R-059: no service can forge another service\'s audit rows, and none can forge a sync receipt but records, for itself', async () => {
+    await seed(pg);
+    const forge = (service: Service, principal: string | null, account: string | null, action: string) =>
+      failsWith(
+        (principal === null
+          ? pg.databaseFor(service).withoutPrincipal.bind(pg.databaseFor(service))
+          : (fn: (tx: Transaction) => Promise<unknown>) => pg.databaseFor(service).withPrincipal(principal, fn))((tx) =>
+          tx.query(
+            `INSERT INTO ops.audit_event (account_id, actor_role, action, resource_type, resource_id) VALUES ($1, 'x', $2, 'sync_batch', 'forged')`,
+            [account, action],
+          ),
+        ),
+      );
+
+    // Every role that may append at all, trying to write a receipt for A.
+    for (const service of ['auth', 'enrolment', 'care_team', 'website'] as const) {
+      assert.equal(await forge(service, A, A, 'record.sync'), '42501', `${service} forged a record.sync row`);
+    }
+    // Roles with no INSERT grant: refused by grant.
+    for (const service of ['catalogue', 'notification', 'chronic', 'realtime'] as const) {
+      assert.equal(await forge(service, A, A, 'record.sync'), PERMISSION_DENIED, `${service}`);
+    }
+    // records: only about its own caller.
+    assert.equal(await forge('records', A, A, 'record.sync'), null, 'records could not write its own receipt');
+    assert.equal(await forge('records', A, B, 'record.sync'), '42501', 'records wrote a receipt for another account');
+    assert.equal(await forge('records', A, null, 'record.sync'), '42501', 'records wrote an unattributed receipt');
+
+    // The receipt a forger would have planted for B is not there.
+    assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event WHERE action = 'record.sync' AND account_id = '${B}'`), 0);
+    // ...and records-service, asking for A's receipt, finds exactly the one it wrote.
+    assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event WHERE action = 'record.sync' AND account_id = '${A}'`), 1);
+  });
+
+  test('R-059: each service can write the audit rows it authors, about the account it is allowed to', async () => {
+    await seed(pg);
+    const row = (account: string | null, action: string) => [account, action] as const;
+    const insert = (tx: Transaction, [account, action]: readonly [string | null, string]) =>
+      tx.query(`INSERT INTO ops.audit_event (account_id, actor_role, action, resource_type) VALUES ($1, 'x', $2, 'y')`, [account, action]);
+
+    // enrolment: programme.* and consent.* about the caller; not another's, not another family.
+    const enrol = pg.databaseFor('enrolment');
+    await enrol.withPrincipal(A, (tx) => insert(tx, row(A, 'programme.join')));
+    await enrol.withPrincipal(A, (tx) => insert(tx, row(A, 'consent.grant')));
+    assert.equal(await failsWith(enrol.withPrincipal(A, (tx) => insert(tx, row(B, 'programme.join')))), '42501');
+    assert.equal(await failsWith(enrol.withPrincipal(A, (tx) => insert(tx, row(A, 'account.delete')))), '42501');
+    assert.equal(await failsWith(enrol.withPrincipal(A, (tx) => insert(tx, row(A, 'care.patient.read')))), '42501');
+
+    // auth: account.* about the caller.
+    const auth = pg.databaseFor('auth');
+    await auth.withPrincipal(A, (tx) => insert(tx, row(A, 'account.delete')));
+    assert.equal(await failsWith(auth.withPrincipal(A, (tx) => insert(tx, row(B, 'account.delete')))), '42501');
+    assert.equal(await failsWith(auth.withPrincipal(A, (tx) => insert(tx, row(A, 'programme.join')))), '42501');
+
+    // care-team: care.* about the patient (not the caller), or nobody.
+    const care = pg.databaseFor('care_team');
+    await care.withPrincipal(CLIN, (tx) => insert(tx, row(A, 'care.patient.read')));
+    await care.withPrincipal(CLIN, (tx) => insert(tx, row(null, 'care.patient.read.refused')));
+    assert.equal(await failsWith(care.withPrincipal(CLIN, (tx) => insert(tx, row(A, 'consent.grant')))), '42501');
+
+    // website: waitlist.* and no account.
+    const web = pg.databaseFor('website');
+    await web.withoutPrincipal((tx) => insert(tx, row(null, 'waitlist.delete')));
+    assert.equal(await failsWith(web.withoutPrincipal((tx) => insert(tx, row(A, 'waitlist.delete')))), '42501');
+    assert.equal(await failsWith(web.withoutPrincipal((tx) => insert(tx, row(null, 'care.patient.read')))), '42501');
+
+    // records: anything, about its caller.
+    await pg.databaseFor('records').withPrincipal(A, (tx) => insert(tx, row(A, 'record.delete')));
+  });
+
+  test('R-060: enrolment-service and records-service, as a recipient, see nothing of another account\'s record', async () => {
+    // CLIN holds a live totals consent on ENR_A (and a notes-scope consent exists for CLIN2).
+    // Neither service is the clinician surface, so the recipient policies do not apply to them.
+    await seed(pg);
+    const probes: [Service, string][] = [
+      ['enrolment', 'record.observation'],
+      ['enrolment', 'record.screen_answer'],
+      ['enrolment', 'record.lapse_event'],
+      ['enrolment', 'programme.enrolment'],
+      ['records', 'record.observation'],
+      ['records', 'record.screen_answer'],
+      ['records', 'record.lapse_event'],
+      ['records', 'programme.enrolment'],
+    ];
+    for (const [service, table] of probes) {
+      const column = table === 'programme.enrolment' ? 'id' : 'enrolment_id';
+      const rows = await pg.databaseFor(service).withPrincipal(CLIN, (tx) =>
+        tx.query<{ e: string }>(`SELECT ${column} AS e FROM ${table}`),
+      );
+      assert.ok(rows.every((r) => r.e === ENR_C), `${service} read ${table} rows that are not CLIN's own: ${JSON.stringify(rows)}`);
+      assert.ok(!rows.some((r) => r.e === ENR_A), `${service} read A's ${table} as a recipient`);
+    }
+
+    // Lapse severity and context in particular, with the notes consent too.
+    const notesClinician = await pg.databaseFor('records').withPrincipal(CLIN2, (tx) =>
+      tx.query(`SELECT severity, context FROM record.lapse_event`),
+    );
+    assert.deepEqual(notesClinician, [], 'records-service handed a notes-scope recipient lapse severity/context');
+    const viaEnrolment = await pg.databaseFor('enrolment').withPrincipal(CLIN2, (tx) =>
+      tx.query(`SELECT severity, context FROM record.lapse_event`),
+    );
+    assert.deepEqual(viaEnrolment, []);
+
+    // The consent rows too: a recipient-scoped consent is not visible to either.
+    for (const service of ['enrolment', 'records'] as const) {
+      const consents = await pg.databaseFor(service).withPrincipal(CLIN, (tx) => tx.query(`SELECT id FROM programme.sharing_consent`));
+      assert.deepEqual(consents, [], `${service} saw a consent that names CLIN as recipient`);
+    }
+  });
+
+  test('R-060: the clinician surface and the stream are the only roles the recipient policies apply to', async () => {
+    const rows = await pg.admin<{ tablename: string; policyname: string; roles: string[] }>(
+      `SELECT tablename, policyname, roles FROM pg_policies
+        WHERE policyname LIKE '%recipient%' OR policyname LIKE '%consented%' ORDER BY 1, 2`,
+    );
+    assert.ok(rows.length >= 7);
+    for (const row of rows) {
+      assert.ok(!row.roles.includes('public'), `${row.tablename}.${row.policyname} still applies to PUBLIC`);
+      for (const role of row.roles) {
+        assert.ok(['tether_care_team', 'tether_realtime'].includes(role), `${row.policyname} names ${role}`);
+      }
+    }
+    // The stream gets the consent row and nothing else.
+    const realtime = rows.filter((r) => r.roles.includes('tether_realtime')).map((r) => r.policyname);
+    assert.deepEqual(realtime, ['sharing_consent_recipient']);
+  });
+
+  test('device release: it needs a principal, and works for an owner that does not bypass RLS', async () => {
+    await seed(pg);
+    const notify = pg.databaseFor('notification');
+
+    // No principal: nothing is released, whoever holds the token.
+    await notify.withoutPrincipal((tx) => tx.query(`SELECT ops.release_device_token('token-a')`));
+    assert.equal(await count(pg, `SELECT 1 FROM ops.device_token WHERE token = 'token-a'`), 1, 'released with no principal set');
+
+    // Now make the function's owner an ordinary role (no superuser, no BYPASSRLS)
+    // and point the two policies at it, exactly as the migration does for whoever
+    // ran it. The release must still work: it depends on the policy, not on the
+    // owner's attributes.
+    const [{ owner } = { owner: '' }] = await pg.admin<{ owner: string }>(
+      `SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid = 'ops.release_device_token(text)'::regprocedure`,
+    );
+    const [policy] = await pg.admin<{ roles: string[] }>(
+      `SELECT roles FROM pg_policies WHERE tablename = 'device_token' AND policyname = 'device_token_release'`,
+    );
+    assert.deepEqual(policy?.roles, [owner], 'the release policy is not named for the function owner');
+
+    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_owner') THEN CREATE ROLE rls_owner NOLOGIN; END IF; END $$`);
+    await pg.admin(`GRANT USAGE, CREATE ON SCHEMA ops TO rls_owner`);
+    await pg.admin(`GRANT USAGE ON SCHEMA public TO rls_owner`);
+    await pg.admin(`GRANT SELECT, DELETE ON ops.device_token TO rls_owner`);
+    try {
+      await pg.admin(`ALTER FUNCTION ops.release_device_token(text) OWNER TO rls_owner`);
+      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO rls_owner`);
+      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO rls_owner`);
+
+      const [privileged] = await pg.admin<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'rls_owner'`,
+      );
+      assert.deepEqual(privileged, { rolsuper: false, rolbypassrls: false });
+
+      await notify.withPrincipal(B, (tx) => tx.query(`SELECT ops.release_device_token('token-a')`));
+      assert.equal(await count(pg, `SELECT 1 FROM ops.device_token WHERE token = 'token-a'`), 0, 'a non-bypassing owner could not release the token');
+      assert.equal(await count(pg, `SELECT 1 FROM ops.device_token WHERE token = 'token-b'`), 1, 'it released the caller\'s own');
+
+      // Without the policy the same owner can release nothing: the dependency is real.
+      await pg.admin(`INSERT INTO ops.device_token (account_id, token, platform) VALUES ('${A}', 'token-a2', 'android')`);
+      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO ${owner}`);
+      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO ${owner}`);
+      await notify.withPrincipal(B, (tx) => tx.query(`SELECT ops.release_device_token('token-a2')`));
+      assert.equal(await count(pg, `SELECT 1 FROM ops.device_token WHERE token = 'token-a2'`), 1, 'the policy is not what makes it work');
+    } finally {
+      await pg.admin(`ALTER FUNCTION ops.release_device_token(text) OWNER TO ${owner}`);
+      await pg.admin(`ALTER POLICY device_token_release ON ops.device_token TO ${owner}`);
+      await pg.admin(`ALTER POLICY device_token_release_select ON ops.device_token TO ${owner}`);
+      await pg.admin(`REVOKE CREATE ON SCHEMA ops FROM rls_owner`);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -1163,7 +1402,7 @@ function registerSuite(pg: TestPostgres): void {
 
   test('website: the waitlist is denied by policy as well as by grant, to a role that is granted everything', async () => {
     await seed(pg);
-    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$`);
+    await pg.admin(PROBE_SQL);
     await pg.admin(`GRANT USAGE ON SCHEMA identity, ops TO rls_probe`);
     await pg.admin(`GRANT ALL ON ALL TABLES IN SCHEMA identity, ops TO rls_probe`);
 
@@ -1346,7 +1585,7 @@ function registerSuite(pg: TestPostgres): void {
     // The patient it is about can read it; a stranger cannot.
     const asPatient = (who: string) =>
       pg.asRole('rls_probe', who, (tx) => tx.query(`SELECT id FROM care.escalation`));
-    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_probe') THEN CREATE ROLE rls_probe NOLOGIN; END IF; END $$`);
+    await pg.admin(PROBE_SQL);
     await pg.admin(`GRANT USAGE ON SCHEMA programme, care TO rls_probe`);
     await pg.admin(`GRANT ALL ON ALL TABLES IN SCHEMA programme, care TO rls_probe`);
     assert.equal((await asPatient(A)).length, 1, 'the person an escalation is about cannot see it');
@@ -1521,6 +1760,7 @@ function registerSuite(pg: TestPostgres): void {
       assert.ok(heard(A).includes('programme.sharing_consent:update:revoked'), 'the owner was not told');
       assert.ok(heard(CLIN).includes('programme.sharing_consent:update:revoked'), 'the recipient was not told its access ended');
       assert.deepEqual(heard(B).filter((h) => h.startsWith('programme.sharing_consent')), [], 'a stranger heard a consent revocation');
+      assert.deepEqual(heard(CLIN2).filter((h) => h.startsWith('programme.sharing_consent')), [], 'another recipient was told somebody else\'s consent was withdrawn');
       assert.deepEqual(heard(STRANGER), [], 'an unrelated account heard a consent revocation');
 
       // After the revocation, CLIN hears nothing more about A's record...
@@ -1531,6 +1771,8 @@ function registerSuite(pg: TestPostgres): void {
       assert.equal(heard(CLIN).length, before, 'a withdrawn record is still being announced to its former recipient');
       // ...and the owner still does.
       assert.equal(heard(A).filter((h) => h === 'record.observation:insert').length, 2);
+      // ...and so does the other recipient, whose own consent is still live.
+      assert.equal(heard(CLIN2).filter((h) => h === 'record.observation:insert').length, 2, 'another recipient lost their view');
     } finally {
       await stop();
     }

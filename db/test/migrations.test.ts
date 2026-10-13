@@ -186,11 +186,14 @@ test('no migration sets a password or carries a credential', () => {
   }
 });
 
+/** `code()` with quoted strings blanked, so an error message cannot trip a keyword check. */
+const codeWithoutStrings = (name: string): string => code(name).replace(/'(?:[^']|'')*'/g, "''");
+
 test('no migration creates or alters a role to be a superuser, to bypass RLS, or to create roles', () => {
   const offenders: string[] = [];
   for (const name of files) {
     // `NOSUPERUSER` and friends are the point; a bare `SUPERUSER` is not.
-    for (const match of code(name).matchAll(/(?<!NO)\b(SUPERUSER|BYPASSRLS|CREATEROLE|CREATEDB|REPLICATION)\b/gi)) {
+    for (const match of codeWithoutStrings(name).matchAll(/(?<!NO)\b(SUPERUSER|BYPASSRLS|CREATEROLE|CREATEDB|REPLICATION)\b/gi)) {
       offenders.push(`${name}: ${match[0]}`);
     }
   }
@@ -205,9 +208,16 @@ test('every login role is created locked and is never given a password here', ()
   // migration would lock a service out of its own database.
   const alter = /ALTER ROLE %I LOGIN[^']*'/.exec(sql)?.[0] ?? '';
   assert.doesNotMatch(alter, /VALID UNTIL/i);
-  for (const attribute of ['NOSUPERUSER', 'NOBYPASSRLS', 'NOCREATEDB', 'NOCREATEROLE', 'NOREPLICATION']) {
-    assert.match(sql, new RegExp(attribute), `the roles migration never states ${attribute}`);
+  // Attributes come from CREATE ROLE's defaults and are not re-asserted with
+  // ALTER ROLE, which a non-superuser migrator may be refused. A guard fails the
+  // apply instead if any tether_ role is privileged.
+  const alters = [...sql.matchAll(/ALTER ROLE[^;]*/gi)].map((m) => m[0]);
+  assert.ok(alters.length > 0);
+  for (const alter of alters) {
+    assert.doesNotMatch(alter, /NO(SUPERUSER|BYPASSRLS|REPLICATION|CREATEDB|CREATEROLE)/i, `ALTER ROLE re-asserts an attribute: ${alter}`);
   }
+  assert.match(sql, /RAISE EXCEPTION/);
+  assert.match(sql, /rolsuper OR rolbypassrls OR rolreplication/, 'no guard against a privileged tether_ role');
 });
 
 test('grants to service roles are explicit: no GRANT ALL, no grant option, no schema CREATE', () => {
@@ -227,6 +237,7 @@ test('no existing migration was edited to make room for the service roles', () =
     '20260914120800_service_roles.sql',
     '20260914120900_rls_consent_policies.sql',
     '20260914121000_service_grants.sql',
+    '20260914121100_consent_revocation_recipient.sql',
   ]);
 });
 
@@ -252,11 +263,44 @@ test('the SECURITY DEFINER functions pin their search_path and are not executabl
 
   for (const chunk of definers) {
     const name = /^([\w.]+)\(/.exec(chunk)?.[1] ?? '';
-    assert.match(chunk, /SET search_path = pg_catalog, public/, `${name} does not pin its search_path`);
+    assert.match(chunk, /SET search_path = ''/, `${name} does not pin an empty search_path`);
     assert.match(
       sql,
       new RegExp(`REVOKE ALL ON FUNCTION ${name.replace('.', '\\.')}\\([^)]*\\) FROM PUBLIC`),
       `${name} is executable by PUBLIC`,
     );
   }
+});
+
+test('the audit trail has no blanket INSERT policy: each service appends only what it authors', () => {
+  const sql = code('20260914120900_rls_consent_policies.sql');
+  assert.doesNotMatch(sql, /CREATE POLICY audit_event_append ON/i, 'the single open append policy is back');
+
+  const policies = [...sql.matchAll(/CREATE POLICY (audit_event_append\w*) ON ops\.audit_event\s+FOR INSERT TO ([\w, ]+)\s+WITH CHECK \(([\s\S]*?)\);/gi)];
+  assert.deepEqual(
+    policies.map((p) => p[2]?.trim()).sort(),
+    ['tether_auth', 'tether_care_team', 'tether_enrolment', 'tether_records', 'tether_website'],
+  );
+  for (const [, name, , check] of policies) {
+    assert.doesNotMatch(check ?? '', /^\s*true\s*$/i, `${name} is WITH CHECK (true)`);
+  }
+});
+
+test('the recipient policies are recreated for the clinician surface only', () => {
+  const sql = code('20260914120900_rls_consent_policies.sql');
+  for (const policy of [
+    'sharing_consent_recipient', 'enrolment_consented_recipient', 'screen_answer_consented_recipient',
+    'lapse_event_consented_recipient', 'observation_consented_recipient',
+  ]) {
+    assert.match(sql, new RegExp(`DROP POLICY ${policy}\\b`), `${policy} is not dropped`);
+    assert.match(sql, new RegExp(`CREATE POLICY ${policy} ON [\\w.]+\\s+FOR SELECT TO tether_care_team`), `${policy} is not TO tether_care_team`);
+  }
+});
+
+test('the revocation payload migration replaces only the notify function, with an empty search_path', () => {
+  const sql = code('20260914121100_consent_revocation_recipient.sql');
+  assert.match(sql, /CREATE OR REPLACE FUNCTION programme\.notify_consent_change\(\)/);
+  assert.match(sql, /SET search_path = ''/);
+  assert.match(sql, /'recipientId'/);
+  assert.doesNotMatch(sql, /CREATE TRIGGER|ALTER TABLE|DROP /i);
 });

@@ -4,7 +4,10 @@ Each service that touches Postgres connects as its **own login role**. None of
 them is a superuser, none bypasses row-level security, and none owns an object.
 This is the control behind risk-register rows R-032 and R-033; the migrations are
 `supabase/migrations/20260914120800_service_roles.sql`,
-`…120900_rls_consent_policies.sql` and `…121000_service_grants.sql`.
+`…120900_rls_consent_policies.sql`, `…121000_service_grants.sql` and
+`…121100_consent_revocation_recipient.sql`. The roles file is safe to re-run; the
+policies file (`…120900`) is **not idempotent** and, like every migration, is
+applied once.
 
 Before these existed every service shared one DSN, and that DSN was the project's
 superuser. A superuser bypasses RLS even on a `FORCE`d table, so none of the
@@ -80,6 +83,31 @@ Also: a table's own policies may reference columns the caller cannot select, but
 the tables a policy's **subquery** reads need a grant for the caller. That is why
 `tether_care_team` can select `programme.enrolment(id, account_id)` even though a
 few of its statements never name that table.
+
+## Policies that are per role
+
+* **Recipient access is the clinician surface's alone.** 0005 wrote its recipient
+  policies for every role; they are recreated `TO tether_care_team` (and, for the
+  consent row only, `TO tether_realtime`), so enrolment-service and records-service,
+  which can read `record.*`, never receive a row because a consent names their
+  caller as a recipient.
+* **Audit appends are per role** (`audit_event_append_*`, 0010 §4). records may
+  write any action about the caller's own account, so it alone can write a
+  `record.sync` receipt; auth is limited to `account.*`, enrolment to `programme.*`
+  and `consent.*`, care-team to `care.*`, website to `waitlist.*` with no account.
+  The account checks rest on `app.account_id`, which is a convention (see below);
+  the action prefixes do not. Together they stop a bug or a confused service
+  forging another's rows, not a hostile one impersonating an account.
+* **A service refuses to report ready on a privileged role.** `db.ping()` (so every
+  `/readyz`) also checks that `current_user` is neither `SUPERUSER` nor
+  `BYPASSRLS`, logs at fatal and reports not-ready otherwise. The one escape,
+  for a laptop before the roles exist, is
+  `TETHER_ALLOW_PRIVILEGED_DB_ROLE=local-development-only`; it is ignored when
+  `NODE_ENV=production` and logged at error on every check.
+* **`ops.release_device_token`** needs a principal (it does nothing when
+  `app.account_id` is unset) and does not depend on its owner bypassing RLS: the
+  migration gives whichever role owns the function one narrow policy on
+  `ops.device_token`, named from the catalogue.
 
 ## How the policies know who is asking
 
@@ -216,6 +244,38 @@ A grant and the SQL that needs it are one change. When a service's SQL changes:
   assertions against another Postgres (the module exports `start()`; see
   `db/test/support/postgres.ts`).
 * `db/test/migrations.test.ts` is the static half and always runs.
+
+## Waitlist erasure (R-062: owner and counsel to decide)
+
+`DELETE /api/v1/waitlist/:id` now requires a verified token carrying the `admin`
+role. **No such token can exist today.** `auth-service` signs access tokens with no
+roles (`services/auth-service/src/routes.ts:300-303` passes only the account and
+family), so the claim is empty for everyone. The same is true of the `clinician`
+role care-team requires, and of `POST /waitlist/purge`. Giving tokens roles is an
+authentication-policy change and needs the owner's approval; this branch does not
+make it. Until then a person who asks to be removed ("sooner if you ask us to
+delete it", privacy notice) is handled by hand, by someone holding the database
+owner role. The procedure, all as the project owner (which bypasses RLS and is not
+any service role):
+
+```sql
+-- 1. Find the enquiry from what the person gave you. Never paste it elsewhere.
+SELECT id, received_at FROM ops.waitlist_enquiry WHERE email = 'person@example.org';
+
+-- 2. Delete it, and record that you did, in one transaction. The audit row names
+--    the enquiry's id and not the address, which would outlive the deletion.
+BEGIN;
+DELETE FROM ops.waitlist_enquiry WHERE id = '<the id>' RETURNING id;
+INSERT INTO ops.audit_event (actor_role, action, resource_type, resource_id, detail)
+  VALUES ('owner', 'waitlist.delete', 'waitlist_enquiry', '<the id>',
+          jsonb_build_object('reason', 'erasure requested', 'manual', true));
+COMMIT;
+```
+
+If the owner role does not bypass RLS, both statements are refused by design (no
+policy names it) and the work is done through a role that does. Whether erasure by
+a person asking should instead be a self-service link (a signed removal token) is
+the open question; counsel should say whether "ask us" is met by this.
 
 ## What this does not do
 

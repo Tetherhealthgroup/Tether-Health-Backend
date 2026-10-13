@@ -34,4 +34,12 @@ export default tseslint.config(
     files: ['**/test/**/*.ts', 'db/*.ts'],
     rules: { 'no-console': 'off' },
   },
+  {
+    // `node:test` registers a test by calling `test(...)`, which returns a promise
+    // the runner owns. Awaiting it would serialise every test in a file and
+    // `void`-ing each one would be noise on every line, so the rule that exists
+    // for request handlers (above) is off where it can only be a false positive.
+    files: ['**/test/**/*.ts'],
+    rules: { '@typescript-eslint/no-floating-promises': 'off' },
+  },
 );

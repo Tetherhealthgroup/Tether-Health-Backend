@@ -115,6 +115,30 @@ const MIGRATIONS = path.join(
 /** The last migration written before per-service roles existed. */
 const LAST_PRE_ROLES = '20260914120700';
 
+/**
+ * Rows that exist *before* the migrations that add `owner_account_id` run, so that
+ * the backfill is exercised on existing data rather than on an empty table. The
+ * data are synthetic. `service-roles.integration.test.ts` asserts on them first,
+ * before any test truncates the database.
+ */
+export const PRE_EXISTING = {
+  account: 'b1000000-0000-4000-8000-000000000001',
+  enrolment: 'b2000000-0000-4000-8000-000000000001',
+  consent: 'b3000000-0000-4000-8000-000000000001',
+} as const;
+
+const PRE_EXISTING_SQL = `
+  INSERT INTO catalogue.area (id, name, scope, status, position)
+    VALUES ('tobacco', 'Tobacco', 'synthetic', 'in_development', 1);
+  INSERT INTO identity.account (id, external_id) VALUES ('${PRE_EXISTING.account}', 'ext-preexisting');
+  INSERT INTO programme.enrolment (id, account_id, area_id)
+    VALUES ('${PRE_EXISTING.enrolment}', '${PRE_EXISTING.account}', 'tobacco');
+  INSERT INTO programme.sharing_consent
+    (id, enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
+    VALUES ('${PRE_EXISTING.consent}', '${PRE_EXISTING.enrolment}', 'notes', 'care_team',
+            'b4000000-0000-4000-8000-000000000001', 'v0', 'synthetic wording');
+`;
+
 export function migrationFiles(): { name: string; sql: string }[] {
   return readdirSync(MIGRATIONS)
     .filter((name) => name.endsWith('.sql'))
@@ -146,6 +170,7 @@ export async function applyMigrations(
         GRANT USAGE ON SCHEMA identity, catalogue, programme, record, care, chronic, ops TO anon, authenticated;
         GRANT ALL ON ALL TABLES IN SCHEMA identity, catalogue, programme, record, care, chronic, ops TO anon, authenticated;
       `);
+      await run(PRE_EXISTING_SQL);
       staged = true;
     }
     await run(`BEGIN;\n${sql}\nCOMMIT;`).catch(async (error: unknown) => {
