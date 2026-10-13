@@ -113,6 +113,7 @@ test('the public allowlist lets through exactly what it should', () => {
 
   // The website form: there is no account yet, by definition.
   assert.equal(isPublic('POST', '/api/v1/waitlist'), true);
+  assert.equal(isPublic('POST', '/api/v1/waitlist/'), true);
 
   // The orchestrator has no credentials.
   assert.equal(isPublic('GET', '/healthz'), true);
@@ -120,6 +121,17 @@ test('the public allowlist lets through exactly what it should', () => {
 
   // A preflight is sent without the Authorization header it is asking about.
   assert.equal(isPublic('OPTIONS', '/api/v1/records/answers'), true);
+});
+
+test('the public allowlist stops at the waitlist form itself', () => {
+  // R-033: erasing an enquiry was reachable by anyone, because the whole
+  // `/api/v1/waitlist` prefix was public. Only the form's POST is.
+  const id = '11111111-1111-4111-8111-111111111111';
+  assert.equal(isPublic('DELETE', `/api/v1/waitlist/${id}`), false);
+  assert.equal(isPublic('POST', '/api/v1/waitlist/purge'), false);
+  assert.equal(isPublic('GET', '/api/v1/waitlist'), false);
+  assert.equal(isPublic('PUT', '/api/v1/waitlist'), false);
+  assert.equal(isPublic('DELETE', '/api/v1/waitlist'), false);
 });
 
 test('the public allowlist stops at reads of the catalogue', () => {

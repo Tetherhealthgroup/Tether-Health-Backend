@@ -107,8 +107,11 @@ export function routeFor(pathname: string): RouteEntry | null {
  * - `/api/v1/catalogue/*`, safe methods only — the design bundle is non-PHI and
  *   the website reads it anonymously. Writes to the catalogue are an editorial
  *   action and stay behind a token.
- * - `/api/v1/waitlist` — the enquiry form on a static marketing site. There is
- *   no account yet, by definition.
+ * - `POST /api/v1/waitlist`, and only that — the enquiry form on a static
+ *   marketing site. There is no account yet, by definition. Erasing an enquiry
+ *   (`DELETE /api/v1/waitlist/:id`) and the retention purge are admin actions
+ *   and need a token here as well as at the service (R-033: erasure used to be
+ *   open to anyone who could reach the path).
  * - `/healthz`, `/readyz` — the orchestrator has no credentials.
  * - Any `OPTIONS` — a CORS preflight is sent by the browser without the
  *   `Authorization` header it is asking permission to send. 401-ing a preflight
@@ -123,7 +126,10 @@ export function isPublic(method: string, pathname: string): boolean {
   if (method === 'OPTIONS') return true;
   if (pathname === '/healthz' || pathname === '/readyz') return true;
   if (matchesPrefix('/api/v1/auth', pathname)) return true;
-  if (matchesPrefix('/api/v1/waitlist', pathname)) return true;
+  if (matchesPrefix('/api/v1/waitlist', pathname)) {
+    const isForm = pathname === '/api/v1/waitlist' || pathname === '/api/v1/waitlist/';
+    return method === 'POST' && isForm;
+  }
   if (matchesPrefix('/api/v1/catalogue', pathname)) {
     return method === 'GET' || method === 'HEAD';
   }
