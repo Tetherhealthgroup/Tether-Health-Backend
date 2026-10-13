@@ -127,7 +127,9 @@ const CONSENT_COLUMNS = `
  * "This enrolment belongs to this account", as a predicate.
  *
  * `column` and `account` are SQL fragments written in this file — a column name
- * and a bind placeholder — never input.
+ * and a bind placeholder — never input. `column` is written qualified
+ * (`programme.sharing_consent.enrolment_id`) so that it cannot bind to a column
+ * of the subquery's own table.
  */
 const OWNS_ENROLMENT = (column: string, account: string): string =>
   `EXISTS (SELECT 1 FROM programme.enrolment own
@@ -154,7 +156,7 @@ async function loadConsentRows(
     `SELECT ${CONSENT_COLUMNS}
        FROM programme.sharing_consent
       WHERE enrolment_id = ANY($1)
-        AND ${OWNS_ENROLMENT('enrolment_id', '$2')}
+        AND ${OWNS_ENROLMENT('programme.sharing_consent.enrolment_id', '$2')}
       ORDER BY granted_at, id`,
     [enrolmentIds, accountId],
   );
@@ -361,7 +363,7 @@ export async function revokeLive(
         AND recipient_kind = $3
         AND recipient_id IS NOT DISTINCT FROM $4
         AND revoked_at IS NULL
-        AND ${OWNS_ENROLMENT('enrolment_id', '$5')}
+        AND ${OWNS_ENROLMENT('programme.sharing_consent.enrolment_id', '$5')}
       RETURNING id`,
     [
       input.enrolmentId,
@@ -398,7 +400,7 @@ export async function grantConsent(
         AND recipient_kind = $3
         AND recipient_id IS NOT DISTINCT FROM $4
         AND revoked_at IS NULL
-        AND ${OWNS_ENROLMENT('enrolment_id', '$5')}`,
+        AND ${OWNS_ENROLMENT('programme.sharing_consent.enrolment_id', '$5')}`,
     [
       input.enrolmentId,
       input.scope,
@@ -521,14 +523,14 @@ export async function loadPreviewSource(
   const answers = await tx.one<{ count: number }>(
     `SELECT count(*)::int AS count
        FROM record.screen_answer
-      WHERE enrolment_id = $1 AND ${OWNS_ENROLMENT('enrolment_id', '$2')}`,
+      WHERE enrolment_id = $1 AND ${OWNS_ENROLMENT('record.screen_answer.enrolment_id', '$2')}`,
     [enrolment.id, accountId],
   );
 
   const lapses = await tx.query<{ occurredAt: Date | string }>(
     `SELECT occurred_at AS "occurredAt"
        FROM record.lapse_event
-      WHERE enrolment_id = $1 AND ${OWNS_ENROLMENT('enrolment_id', '$2')}
+      WHERE enrolment_id = $1 AND ${OWNS_ENROLMENT('record.lapse_event.enrolment_id', '$2')}
       ORDER BY occurred_at DESC`,
     [enrolment.id, accountId],
   );
@@ -540,7 +542,7 @@ export async function loadPreviewSource(
             answered_at AS "answeredAt"
        FROM record.screen_answer
       WHERE enrolment_id = $1 AND kind = 'text'
-        AND ${OWNS_ENROLMENT('enrolment_id', '$2')}
+        AND ${OWNS_ENROLMENT('record.screen_answer.enrolment_id', '$2')}
       ORDER BY answered_at, screen_id, block_index`,
     [enrolment.id, accountId],
   );

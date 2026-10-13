@@ -162,3 +162,101 @@ test('no PHI table carries a soft-delete column', () => {
     'a PHI table has a soft-delete column',
   );
 });
+
+// ---------------------------------------------------------------------------
+// Service roles (R-032). Static checks on the text of the migrations; what the
+// roles can actually do is `service-roles.integration.test.ts`, against a real
+// Postgres, and is skipped where there is none.
+// ---------------------------------------------------------------------------
+
+/** The SQL with `--` comments removed, so prose cannot satisfy or trip a check. */
+const code = (name: string): string =>
+  read(name)
+    .split('\n')
+    .map((line) => line.replace(/--.*$/, ''))
+    .join('\n');
+
+test('no migration sets a password or carries a credential', () => {
+  // A password in a migration is a password in every clone of the repository.
+  // Roles are created locked and the operator sets the password out of band.
+  for (const name of files) {
+    const sql = code(name);
+    assert.doesNotMatch(sql, /\bPASSWORD\b/i, `${name} mentions PASSWORD`);
+    assert.doesNotMatch(sql, /postgres(ql)?:\/\/[^\s]*:[^\s@]+@/i, `${name} contains a connection string`);
+  }
+});
+
+test('no migration creates or alters a role to be a superuser, to bypass RLS, or to create roles', () => {
+  const offenders: string[] = [];
+  for (const name of files) {
+    // `NOSUPERUSER` and friends are the point; a bare `SUPERUSER` is not.
+    for (const match of code(name).matchAll(/(?<!NO)\b(SUPERUSER|BYPASSRLS|CREATEROLE|CREATEDB|REPLICATION)\b/gi)) {
+      offenders.push(`${name}: ${match[0]}`);
+    }
+  }
+  assert.deepEqual(offenders, []);
+});
+
+test('every login role is created locked and is never given a password here', () => {
+  const sql = code('20260914120800_service_roles.sql');
+  assert.match(sql, /LOGIN VALID UNTIL %L/, 'login roles are not created with a VALID UNTIL');
+  assert.match(sql, /'-infinity'/, 'login roles are not created locked');
+  // The re-assertion on every apply must not touch VALID UNTIL, or applying a
+  // migration would lock a service out of its own database.
+  const alter = /ALTER ROLE %I LOGIN[^']*'/.exec(sql)?.[0] ?? '';
+  assert.doesNotMatch(alter, /VALID UNTIL/i);
+  for (const attribute of ['NOSUPERUSER', 'NOBYPASSRLS', 'NOCREATEDB', 'NOCREATEROLE', 'NOREPLICATION']) {
+    assert.match(sql, new RegExp(attribute), `the roles migration never states ${attribute}`);
+  }
+});
+
+test('grants to service roles are explicit: no GRANT ALL, no grant option, no schema CREATE', () => {
+  const sql = code('20260914121000_service_grants.sql');
+  assert.doesNotMatch(sql, /GRANT\s+ALL\b/i, 'a service role is granted ALL');
+  assert.doesNotMatch(sql, /WITH\s+GRANT\s+OPTION/i);
+  assert.doesNotMatch(sql, /GRANT\s+(USAGE,\s*)?CREATE\b/i);
+  assert.doesNotMatch(sql, /\bTO\s+PUBLIC\b/i);
+  assert.doesNotMatch(sql, /\bTRUNCATE\b|\bREFERENCES\b|\bTRIGGER\b/);
+});
+
+test('no existing migration was edited to make room for the service roles', () => {
+  // The roles, grants and policy fixes are new files. 0001 to 0008 are the
+  // history other environments have already applied.
+  const added = files.filter((name) => name.slice(0, 14) > '20260914120700');
+  assert.deepEqual(added, [
+    '20260914120800_service_roles.sql',
+    '20260914120900_rls_consent_policies.sql',
+    '20260914121000_service_grants.sql',
+  ]);
+});
+
+test('every table the new policies protect still has RLS forced', () => {
+  const all = files.map(read).join('\n');
+  for (const table of ['ops.audit_event', 'identity.account', 'ops.waitlist_enquiry']) {
+    const escaped = table.replace('.', '\\.');
+    assert.match(all, new RegExp(`ALTER TABLE ${escaped}\\s+ENABLE ROW LEVEL SECURITY`, 'i'), table);
+    assert.match(all, new RegExp(`ALTER TABLE ${escaped}\\s+FORCE\\s+ROW LEVEL SECURITY`, 'i'), table);
+  }
+});
+
+test('the SECURITY DEFINER functions pin their search_path and are not executable by PUBLIC', () => {
+  const sql = code('20260914120900_rls_consent_policies.sql');
+  // One chunk per function, so one function's text cannot satisfy another's check.
+  const definers = sql
+    .split(/CREATE OR REPLACE FUNCTION /i)
+    .slice(1)
+    .filter((chunk) => /SECURITY DEFINER/i.test(chunk.split(/\$\$/)[0] ?? ''));
+
+  const names = definers.map((chunk) => /^([\w.]+)\(/.exec(chunk)?.[1]);
+  assert.deepEqual(names, ['care.lapse_details', 'ops.release_device_token']);
+
+  for (const chunk of definers) {
+    const name = /^([\w.]+)\(/.exec(chunk)?.[1] ?? '';
+    assert.match(chunk, /SET search_path = pg_catalog, public/, `${name} does not pin its search_path`);
+    assert.match(
+      sql,
+      new RegExp(`REVOKE ALL ON FUNCTION ${name.replace('.', '\\.')}\\([^)]*\\) FROM PUBLIC`),
+      `${name} is executable by PUBLIC`,
+    );
+  }
+});

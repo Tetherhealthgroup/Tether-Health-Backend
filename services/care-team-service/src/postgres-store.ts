@@ -46,6 +46,13 @@ import type {
  * `enrolment` and `clinician` are SQL fragments written in this file — a column
  * reference and a bind placeholder — never input. With `scope` set, only a
  * consent of that scope satisfies it: `notes` for anything a person wrote.
+ *
+ * `enrolment` must be **qualified** (`record.observation.enrolment_id`, never
+ * `enrolment_id`). The subquery's own table has a column of that name, so an
+ * unqualified reference binds to the consent row itself, the join degenerates to
+ * `consent.enrolment_id = consent.enrolment_id`, and the predicate quietly means
+ * "this clinician holds a live consent on *something*". The integration suite
+ * found exactly that, and `predicates.test.ts` now rejects it.
  */
 const LIVE_CONSENT = (
   enrolment: string,
@@ -310,7 +317,7 @@ export function createPostgresStore(): CareStore {
         `SELECT to_char(date_trunc('week', occurred_at), 'IYYY"-W"IW') AS week,
                 count(*)::text AS recorded
            FROM record.lapse_event
-          WHERE enrolment_id = $1 AND ${LIVE_CONSENT('enrolment_id', '$2')}
+          WHERE enrolment_id = $1 AND ${LIVE_CONSENT('record.lapse_event.enrolment_id', '$2')}
           GROUP BY 1
           ORDER BY 1`,
         [enrolmentId, ctx.clinicianId],
@@ -350,7 +357,7 @@ export function createPostgresStore(): CareStore {
                 (array_agg(value_num ORDER BY observed_at DESC))[1]::text AS latest_value
            FROM record.observation
           WHERE enrolment_id = $1 AND value_num IS NOT NULL
-            AND ${LIVE_CONSENT('enrolment_id', '$2')}
+            AND ${LIVE_CONSENT('record.observation.enrolment_id', '$2')}
           GROUP BY measure_id, unit, source, platform
           ORDER BY measure_id`,
         [enrolmentId, ctx.clinicianId],
@@ -364,7 +371,7 @@ export function createPostgresStore(): CareStore {
                 max(value_num)::text AS max_value
            FROM record.observation
           WHERE enrolment_id = $1 AND value_num IS NOT NULL
-            AND ${LIVE_CONSENT('enrolment_id', '$2')}
+            AND ${LIVE_CONSENT('record.observation.enrolment_id', '$2')}
           GROUP BY 1, 2
           ORDER BY 1, 2`,
         [enrolmentId, ctx.clinicianId],
@@ -407,7 +414,7 @@ export function createPostgresStore(): CareStore {
         `SELECT screen_id, block_index, value #>> '{}' AS value, answered_at
            FROM record.screen_answer
           WHERE enrolment_id = $1 AND kind = 'text'
-            AND ${LIVE_CONSENT('enrolment_id', '$2', 'notes')}
+            AND ${LIVE_CONSENT('record.screen_answer.enrolment_id', '$2', 'notes')}
           ORDER BY screen_id, block_index`,
         [enrolmentId, ctx.clinicianId],
       );
@@ -456,7 +463,7 @@ export function createPostgresStore(): CareStore {
         `SELECT measure_id, value_text, unit, observed_at, source, platform
            FROM record.observation
           WHERE enrolment_id = $1 AND value_text IS NOT NULL
-            AND ${LIVE_CONSENT('enrolment_id', '$2', 'notes')}
+            AND ${LIVE_CONSENT('record.observation.enrolment_id', '$2', 'notes')}
           ORDER BY observed_at DESC`,
         [enrolmentId, ctx.clinicianId],
       );
@@ -529,7 +536,7 @@ export function createPostgresStore(): CareStore {
         `SELECT id, enrolment_id, signal, detail, policy_area_id, policy_version,
                 routed_to_kind, routed_to, raised_at, acknowledge_by, acknowledged_at
            FROM care.escalation
-          WHERE enrolment_id = $1 AND ${LIVE_CONSENT('enrolment_id', '$2')}
+          WHERE enrolment_id = $1 AND ${LIVE_CONSENT('care.escalation.enrolment_id', '$2')}
           ORDER BY raised_at DESC`,
         [enrolmentId, ctx.clinicianId],
       );

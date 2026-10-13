@@ -80,24 +80,24 @@ TO tether_catalogue;
 
 GRANT USAGE ON SCHEMA programme, record, catalogue, ops TO tether_enrolment;
 
--- enrolment-service/src/repository.ts:169,197,228 SELECT; :280 INSERT; :305,321
+-- enrolment-service/src/repository.ts:171,199,230 SELECT; :282 INSERT; :307,323
 -- UPDATE status/ended_at/hidden. Never deleted here: records-service owns erasure.
 GRANT SELECT ON programme.enrolment TO tether_enrolment;
 GRANT INSERT (account_id, area_id, status) ON programme.enrolment TO tether_enrolment;
 GRANT UPDATE (status, ended_at, hidden) ON programme.enrolment TO tether_enrolment;
 
--- repository.ts:154,394 SELECT; :428 INSERT; :357 UPDATE revoked_at (revocation
+-- repository.ts:156,396 SELECT; :430 INSERT; :359 UPDATE revoked_at (revocation
 -- is a column flip, never a DELETE, so the history survives).
 GRANT SELECT ON programme.sharing_consent TO tether_enrolment;
 GRANT INSERT (enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
   ON programme.sharing_consent TO tether_enrolment;
 GRANT UPDATE (revoked_at) ON programme.sharing_consent TO tether_enrolment;
 
--- repository.ts:504-541 reads the caller's own record to build the preview.
+-- repository.ts:506-543 reads the caller's own record to build the preview.
 -- Read-only: the preview sends nothing and changes nothing.
 GRANT SELECT ON record.observation, record.screen_answer, record.lapse_event TO tether_enrolment;
 
--- repository.ts:249 (shell_rule), :265 (area), :513 (measure label).
+-- repository.ts:251 (shell_rule), :267 (area), :515 (measure label).
 GRANT SELECT (id, rule) ON catalogue.shell_rule TO tether_enrolment;
 GRANT SELECT (id, name, product_id) ON catalogue.area TO tether_enrolment;
 GRANT SELECT (id, label) ON catalogue.measure TO tether_enrolment;
@@ -148,7 +148,7 @@ GRANT SELECT, INSERT ON ops.audit_event TO tether_records;
 
 GRANT USAGE ON SCHEMA programme, record, care, ops TO tether_care_team;
 
--- care-team-service/src/postgres-store.ts:194,230. `consent_text` and `owner_account_id` are not
+-- care-team-service/src/postgres-store.ts:201,237. `consent_text` and `owner_account_id` are not
 -- granted: the clinician surface never shows the patient's wording, and the
 -- owner column is the policy's, not the service's. (A table's own policies
 -- may reference columns the caller cannot select; it is the *other* tables a
@@ -157,27 +157,27 @@ GRANT SELECT (id, enrolment_id, scope, recipient_kind, recipient_id,
               consent_version, granted_at, revoked_at)
   ON programme.sharing_consent TO tether_care_team;
 
--- postgres-store.ts:191,260,285. `account_id` is selected for the audit row
+-- postgres-store.ts:198-202,267,309. `account_id` is selected for the audit row
 -- only (store.ts EnrolmentSummary.subjectAccountId).
 GRANT SELECT (id, account_id, area_id, status, joined_on)
   ON programme.enrolment TO tether_care_team;
 
--- postgres-store.ts:288,290 (counts), :407 (notes).
+-- postgres-store.ts:295,297 (counts), :414 (notes).
 GRANT SELECT (id, enrolment_id, screen_id, block_index, kind, value, answered_at)
   ON record.screen_answer TO tether_care_team;
--- postgres-store.ts:292-296,312 count and date only. The free-text columns are
--- reachable through care.lapse_details() (:435), which checks for a `notes`
+-- postgres-store.ts:299-303,319 count and date only. The free-text columns are
+-- reachable through care.lapse_details() (:441), which checks for a `notes`
 -- consent.
 GRANT SELECT (id, enrolment_id, occurred_at) ON record.lapse_event TO tether_care_team;
--- postgres-store.ts:298-300,351,365,457.
+-- postgres-store.ts:305-307,358,372,464.
 GRANT SELECT (id, enrolment_id, measure_id, value_num, value_text, unit, observed_at, source, platform)
   ON record.observation TO tether_care_team;
 
 GRANT EXECUTE ON FUNCTION care.lapse_details(uuid) TO tether_care_team;
 
--- postgres-store.ts:480 SELECT. Routing is read-only here by design (0005).
+-- postgres-store.ts:487 SELECT. Routing is read-only here by design (0005).
 GRANT SELECT ON care.escalation_policy TO tether_care_team;
--- postgres-store.ts:496 INSERT; :531 SELECT. No UPDATE and no DELETE.
+-- postgres-store.ts:503 INSERT; :538 SELECT. No UPDATE and no DELETE.
 GRANT SELECT ON care.escalation TO tether_care_team;
 GRANT INSERT (enrolment_id, raised_by, consent_id, signal, detail,
               policy_area_id, policy_version, routed_to_kind, routed_to, acknowledge_by)

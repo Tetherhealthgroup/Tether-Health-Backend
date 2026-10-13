@@ -23,6 +23,21 @@ const ENROLMENT = 'aaaaaaaa-0000-4000-8000-000000000001';
 
 const store = createPostgresStore();
 
+/**
+ * The consent join in `LIVE_CONSENT` must be to a *qualified* column of the
+ * statement's own table. Unqualified, it binds to the consent row itself —
+ * `consent.enrolment_id = consent.enrolment_id` — and the predicate silently
+ * means "this clinician holds a live consent on something". The integration
+ * suite caught exactly that; this is the check that runs everywhere.
+ */
+function assertJoinedToEnrolment(sql: string): void {
+  assert.match(
+    sql,
+    /consent\.enrolment_id = (?!consent\.)[a-z_]+\.[a-z_.]+/,
+    `the consent subquery is not joined to the statement's own enrolment:\n${sql}`,
+  );
+}
+
 function context() {
   const tx = recordingTransaction([]);
   const ctx: StoreContext = { tx, clinicianId: CLINICIAN };
@@ -40,6 +55,7 @@ test('every read of a shared record names the clinician', async () => {
   assert.ok(tx.statements.length >= 6);
   for (const statement of tx.statements) {
     assertScopedTo(statement, 'consent.recipient_id', CLINICIAN);
+    assertJoinedToEnrolment(statement.sql);
     assert.match(statement.sql, /consent\.revoked_at IS NULL/);
   }
 });
@@ -53,6 +69,7 @@ test('free text is read only under a notes consent', async () => {
   assert.equal(tx.statements.length, 2);
   for (const statement of tx.statements) {
     assertScopedTo(statement, 'consent.recipient_id', CLINICIAN);
+    assertJoinedToEnrolment(statement.sql);
     assert.match(statement.sql, /consent\.scope = 'notes'/);
   }
 });

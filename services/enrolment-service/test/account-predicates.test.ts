@@ -66,6 +66,15 @@ test('every enrolment read and write names the account', async () => {
   }
 });
 
+/** `own.id = enrolment_id` binds `enrolment_id` to whichever table has one; require it qualified. */
+function assertOwnershipJoinQualified(sql: string): void {
+  assert.match(
+    sql,
+    /own\.id = (?!own\.)[a-z_]+\.[a-z_.]+/,
+    `the ownership subquery is not joined to a qualified column:\n${sql}`,
+  );
+}
+
 test('consent reads, grants and revocations are scoped to the owner of the enrolment', async () => {
   const tx = recordingTransaction([]);
 
@@ -81,6 +90,7 @@ test('consent reads, grants and revocations are scoped to the owner of the enrol
   for (const statement of tx.statements) {
     assert.match(statement.sql, /programme\.sharing_consent/);
     assertScopedTo(statement, 'own.account_id', ACCOUNT);
+    assertOwnershipJoinQualified(statement.sql);
   }
 });
 
@@ -115,6 +125,7 @@ test('a grant is written only against an enrolment the account owns', async () =
   const insert = tx.statements.find((s) => /^\s*INSERT/.test(s.sql));
   assert.ok(lookup && insert);
   assertScopedTo(lookup, 'own.account_id', ACCOUNT, 'consent lookup');
+  assertOwnershipJoinQualified(lookup.sql);
   // The insert reads from the enrolment, filtered to the account, so it yields
   // nothing for an enrolment that is somebody else's.
   assert.match(insert.sql, /FROM programme\.enrolment e\s+WHERE e\.id = \$1 AND e\.account_id = \$7/);
@@ -158,5 +169,6 @@ test('the share preview reads only the account\'s own record', async () => {
   assert.equal(recordReads.length, 4, 'observation, answer count, lapse, notes');
   for (const statement of recordReads) {
     assertScopedTo(statement, 'own.account_id', ACCOUNT);
+    assertOwnershipJoinQualified(statement.sql);
   }
 });

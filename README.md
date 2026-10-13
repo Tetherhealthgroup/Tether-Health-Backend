@@ -60,7 +60,10 @@ had already caught a real defect here:
 - **no two migrations may share a version**
 - **RLS enabled *and* forced, with a policy attached, on every PHI table**
 
-Those are now `db/test/migrations.test.ts`, gated in CI. A guard enforced by a
+Those are now `db/test/migrations.test.ts`, gated in CI. The roles, grants and
+policies are exercised against a real Postgres by
+`db/test/service-roles.integration.test.ts`, which needs Docker and is reported
+as skipped, with the reason, where there is none. A guard enforced by a
 test that runs on every push is not weaker than one enforced by a runner — but
 it is enforced somewhere else, and that has to stay true.
 
@@ -78,4 +81,7 @@ Not conventions — they are in the schema, and a service cannot opt out:
 - **Deletion is real.** No soft-delete on PHI; the audit row outlives the data
   and is not a foreign key to it.
 - **RLS is enabled and FORCED** on every PHI table, and each service connects as
-  its own least-privileged role.
+  its own least-privileged role (`tether_<service>_login`: not a superuser, no
+  `BYPASSRLS`, only the tables, columns and verbs its SQL uses). The role matrix,
+  the operator steps to set each password, and the rollout order are in
+  [`db/ROLES.md`](db/ROLES.md); `DATABASE_URL` is per service, never shared.
