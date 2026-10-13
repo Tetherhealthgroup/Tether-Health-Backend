@@ -1,4 +1,4 @@
-import type { Transaction } from '@tether/core';
+import { problem, type Transaction } from '@tether/core';
 import type {
   ConditionCreate,
   MedicationInput,
@@ -12,10 +12,13 @@ import type {
  *
  * Two rules hold throughout and neither is optional:
  *
- * 1. **No query names an account except through `app_account_id()`.** Each of
- *    these runs inside `db.withPrincipal(accountId)`, and the policies in
- *    `0007_chronic.sql` do the filtering. The `WHERE` clauses below are the
- *    second line, not the first — which is the difference between this and the
+ * 1. **Every query names the account, and so does the policy.** Each of these
+ *    runs inside `db.withPrincipal(accountId)`, and the policies in
+ *    `0007_chronic.sql` filter underneath. The statements below do not lean on
+ *    that: a condition, a reading or a medication is reached only *through* the
+ *    caller's profile (`OWNED_CONDITION`, `OWNED_PROFILE`), so a statement that
+ *    names an id it was handed — from a path, from a body — still cannot reach a
+ *    row that is somebody else's. This is the difference between this and the
  *    FastAPI service, where the only line was a `WHERE` that was not written.
  *
  * 2. **`numeric` is converted explicitly.** `pg` returns `numeric` as a string,
@@ -290,11 +293,15 @@ export async function createCondition(
  */
 export async function conditionExists(
   tx: Transaction,
+  accountId: string,
   conditionId: string,
 ): Promise<boolean> {
   const row = await tx.one<{ id: string }>(
-    'SELECT id FROM chronic.condition WHERE id = $1',
-    [conditionId],
+    `SELECT c.id
+       FROM chronic.condition c
+       JOIN chronic.profile p ON p.id = c.profile_id
+      WHERE c.id = $1 AND p.account_id = $2`,
+    [conditionId, accountId],
   );
   return row !== null;
 }
@@ -345,22 +352,32 @@ function toVitalJson(row: VitalRow): VitalJson {
 
 export async function listVitals(
   tx: Transaction,
+  accountId: string,
   conditionId: string,
   limit: number,
 ): Promise<VitalJson[]> {
   const rows = await tx.query<VitalRow>(
-    `SELECT id, condition_id, metric_key, label, value, unit, note, observed_at
-       FROM chronic.vital_entry
-      WHERE condition_id = $1
-      ORDER BY observed_at DESC
-      LIMIT $2`,
-    [conditionId, limit],
+    `SELECT v.id, v.condition_id, v.metric_key, v.label, v.value, v.unit, v.note, v.observed_at
+       FROM chronic.vital_entry v
+       JOIN chronic.condition c ON c.id = v.condition_id
+       JOIN chronic.profile p ON p.id = c.profile_id
+      WHERE v.condition_id = $1 AND p.account_id = $2
+      ORDER BY v.observed_at DESC
+      LIMIT $3`,
+    [conditionId, accountId, limit],
   );
   return rows.map(toVitalJson);
 }
 
+/**
+ * Inserted *from* the caller's condition, so a reading can only be filed under
+ * a condition that is theirs. For anyone else's the `SELECT` yields no row, the
+ * insert writes nothing, and the caller gets the "no row" error below rather
+ * than a quiet success.
+ */
 export async function createVital(
   tx: Transaction,
+  accountId: string,
   conditionId: string,
   input: VitalEntryInput,
 ): Promise<VitalJson> {
@@ -368,11 +385,15 @@ export async function createVital(
     `
     INSERT INTO chronic.vital_entry
       (condition_id, metric_key, label, value, unit, note, observed_at, source)
-    VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7::timestamptz, now()), $8)
+    SELECT c.id, $3, $4, $5, $6, $7, COALESCE($8::timestamptz, now()), $9
+      FROM chronic.condition c
+      JOIN chronic.profile p ON p.id = c.profile_id
+     WHERE c.id = $1 AND p.account_id = $2
     RETURNING id, condition_id, metric_key, label, value, unit, note, observed_at
     `,
     [
       conditionId,
+      accountId,
       input.metricKey,
       input.label,
       input.value,
@@ -486,7 +507,13 @@ export async function createMedication(
     INSERT INTO chronic.medication
       (profile_id, condition_id, name, dosage, schedule, times,
        reminders_enabled, last_taken_at, active)
-    VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8::timestamptz, $9)
+    SELECT $1, $2::uuid, $3, $4, $5, $6::text[], $7, $8::timestamptz, $9
+     -- A medication may be tied to a condition, and only to one of the caller's
+     -- own. Foreign keys are checked without row-level security, so without this
+     -- a condition id belonging to somebody else would be accepted.
+     WHERE $2::uuid IS NULL
+        OR EXISTS (SELECT 1 FROM chronic.condition c
+                    WHERE c.id = $2::uuid AND c.profile_id = $1::uuid)
     RETURNING ${MEDICATION_COLUMNS}
     `,
     [
@@ -502,7 +529,13 @@ export async function createMedication(
     ],
   );
 
-  if (!row) throw new Error('medication insert returned no row');
+  if (!row) {
+    // The only way this statement yields nothing is a condition id that is not
+    // the caller's. Reported as the same 404 an unknown condition gets, so the
+    // response does not say whether somebody else's condition exists.
+    if (input.conditionId) throw problem.notFound('No such condition.');
+    throw new Error('medication insert returned no row');
+  }
   return toMedicationJson(row);
 }
 
@@ -516,11 +549,15 @@ export async function createMedication(
  */
 export async function deleteMedication(
   tx: Transaction,
+  accountId: string,
   medicationId: string,
 ): Promise<boolean> {
   const rows = await tx.query<{ id: string }>(
-    'DELETE FROM chronic.medication WHERE id = $1 RETURNING id',
-    [medicationId],
+    `DELETE FROM chronic.medication
+      WHERE id = $1
+        AND profile_id = (SELECT id FROM chronic.profile WHERE account_id = $2)
+      RETURNING id`,
+    [medicationId, accountId],
   );
   return rows.length > 0;
 }
