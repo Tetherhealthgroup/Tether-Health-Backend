@@ -13,9 +13,10 @@ import {
   setProblemBase,
   start,
 } from '@tether/core';
+import { resolveAllowlist } from './allowlist.ts';
 import {
-  changeNotification,
   fanOut,
+  parseNotification,
   toSseFrame,
   type Subscriber,
 } from './subscriptions.ts';
@@ -93,17 +94,15 @@ async function startListening(): Promise<void> {
   listener.on('notification', (message) => {
     if (message.channel !== 'tether_change' || !message.payload) return;
 
-    const parsed = changeNotification.safeParse(
-      JSON.parse(message.payload) as unknown,
-    );
-    if (!parsed.success) {
+    const parsed = parseNotification(message.payload);
+    if (!parsed) {
       // A malformed payload means a trigger and this service disagree about
       // the contract. Worth a log; not worth dropping every other listener.
       logger.warn({ channel: message.channel }, 'unparseable change notification');
       return;
     }
 
-    for (const gone of fanOut(subscribers, parsed.data)) {
+    for (const gone of fanOut(subscribers, parsed)) {
       subscribers.delete(gone);
     }
   });
@@ -139,20 +138,11 @@ app.get(
       return;
     }
 
-    // Resolved once, under the caller's own principal, so RLS decides what this
-    // stream may ever mention. Enrolments they own, plus any a live consent
-    // names them as recipient of.
-    const enrolmentIds = await db.withPrincipal(
-      principal.accountId,
-      async (tx) => {
-        const rows = await tx.query<{ id: string }>(
-          `SELECT e.id FROM programme.enrolment e
-           UNION
-           SELECT c.enrolment_id AS id FROM programme.sharing_consent c
-            WHERE c.revoked_at IS NULL`,
-        );
-        return new Set(rows.map((row) => row.id));
-      },
+    // Resolved once, under the caller's own principal and by the caller's own
+    // account: the enrolments they own, and the ones a live consent names them
+    // as recipient of. See `allowlist.ts` for why both are asked for by name.
+    const allowlist = await db.withPrincipal(principal.accountId, (tx) =>
+      resolveAllowlist(tx, principal.accountId),
     );
 
     res.writeHead(200, {
@@ -169,7 +159,8 @@ app.get(
 
     const subscriber: Subscriber = {
       accountId: principal.accountId,
-      enrolmentIds,
+      owned: allowlist.owned,
+      shared: allowlist.shared,
       send: (event) => res.write(toSseFrame(event)),
     };
     subscribers.add(subscriber);
@@ -185,7 +176,10 @@ app.get(
       subscribers.delete(subscriber);
     });
 
-    req.log.info({ enrolments: enrolmentIds.size }, 'stream opened');
+    req.log.info(
+      { enrolments: allowlist.owned.size + allowlist.shared.size },
+      'stream opened',
+    );
   }),
 );
 

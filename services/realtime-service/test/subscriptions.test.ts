@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   changeNotification,
   fanOut,
+  parseNotification,
   shouldDeliver,
   toSseFrame,
   type ChangeNotification,
@@ -11,15 +12,27 @@ import {
 
 const MINE = '11111111-1111-4111-8111-111111111111';
 const THEIRS = '22222222-2222-4222-8222-222222222222';
+const SHARED = '33333333-3333-4333-8333-333333333333';
 
-function subscriber(
-  enrolmentIds: string[],
-  sink: ChangeNotification[] = [],
+interface Options {
+  /** Enrolments the account owns. */
+  owned?: string[];
+  /** Enrolments shared with it by a live consent. */
+  shared?: string[];
+  sink?: ChangeNotification[];
+  alive?: boolean;
+}
+
+function subscriber({
+  owned = [],
+  shared = [],
+  sink = [],
   alive = true,
-): Subscriber {
+}: Options = {}): Subscriber {
   return {
     accountId: 'acct-1',
-    enrolmentIds: new Set(enrolmentIds),
+    owned: new Set(owned),
+    shared: new Set(shared),
     send: (event) => {
       if (!alive) return false;
       sink.push(event);
@@ -35,6 +48,13 @@ const event = (over: Partial<ChangeNotification> = {}): ChangeNotification => ({
   at: '2026-09-14T12:00:00Z',
   ...over,
 });
+
+const consentEvent = (
+  enrolmentId: string,
+  op: ChangeNotification['op'],
+  revoked: boolean,
+): ChangeNotification =>
+  event({ enrolmentId, table: 'programme.sharing_consent', op, revoked });
 
 test('a notification carries no row data', () => {
   // The security property the whole design rests on. If a payload ever grows a
@@ -55,43 +75,58 @@ test('a notification carries no row data', () => {
 });
 
 test('a subscriber hears about its own enrolments', () => {
-  assert.equal(shouldDeliver(subscriber([MINE]), event()), true);
+  assert.equal(shouldDeliver(subscriber({ owned: [MINE] }), event()), true);
 });
 
 test('a subscriber hears nothing about anyone else', () => {
   assert.equal(
-    shouldDeliver(subscriber([MINE]), event({ enrolmentId: THEIRS })),
+    shouldDeliver(subscriber({ owned: [MINE] }), event({ enrolmentId: THEIRS })),
     false,
   );
 });
 
-test('a revocation still reaches a subscriber who just lost access', () => {
-  // The case that has to be special. A clinician's allow-list was resolved at
-  // connect; when consent is revoked the enrolment leaves it, and a plain
-  // "not yours" rule would drop the very event telling them to close the view.
-  // "Revocation is enforced rather than merely recorded."
-  const revocation = event({
-    enrolmentId: THEIRS,
-    table: 'programme.sharing_consent',
-    op: 'update',
-    revoked: true,
-  });
-
-  assert.equal(shouldDeliver(subscriber([MINE]), revocation), true);
+test('a recipient hears record changes on an enrolment shared with them', () => {
+  assert.equal(
+    shouldDeliver(subscriber({ shared: [SHARED] }), event({ enrolmentId: SHARED })),
+    true,
+  );
 });
 
-test('a consent *grant* for someone else is not leaked', () => {
-  // The mirror of the above, and the thing a careless fix would get wrong:
-  // only revocation is exempt. Learning that a stranger granted consent to
-  // somebody is itself a disclosure.
-  const grant = event({
-    enrolmentId: THEIRS,
-    table: 'programme.sharing_consent',
-    op: 'insert',
-    revoked: false,
-  });
+test('R-033: a revocation on someone else\'s enrolment is not broadcast to a stranger', () => {
+  // The defect. `shouldDeliver` used to return true for any revocation, for any
+  // enrolment, to any subscriber, so every connected client learned of every
+  // withdrawal of consent on the platform.
+  const stranger = subscriber({ owned: [MINE] });
+  const revocation = consentEvent(THEIRS, 'update', true);
 
-  assert.equal(shouldDeliver(subscriber([MINE]), grant), false);
+  assert.equal(shouldDeliver(stranger, revocation), false);
+  assert.equal(shouldDeliver(subscriber(), revocation), false);
+});
+
+test('a revocation reaches the recipient it removes access from', () => {
+  // The case that has to be special. A clinician's console is showing a record
+  // the person has just withdrawn, and this is the event that tells it to close.
+  const clinician = subscriber({ shared: [SHARED] });
+
+  assert.equal(shouldDeliver(clinician, consentEvent(SHARED, 'update', true)), true);
+});
+
+test('a revocation reaches the owner of the enrolment', () => {
+  assert.equal(
+    shouldDeliver(subscriber({ owned: [MINE] }), consentEvent(MINE, 'update', true)),
+    true,
+  );
+});
+
+test('a consent grant is the owner\'s alone — a co-recipient does not hear it', () => {
+  // Learning that somebody else was just granted a share on an enrolment you
+  // hold is itself a disclosure, so only a revocation (which ends *your* view)
+  // is exempt for a recipient.
+  const grant = consentEvent(SHARED, 'insert', false);
+
+  assert.equal(shouldDeliver(subscriber({ shared: [SHARED] }), grant), false);
+  assert.equal(shouldDeliver(subscriber({ owned: [SHARED] }), grant), true);
+  assert.equal(shouldDeliver(subscriber({ owned: [MINE] }), grant), false);
 });
 
 test('fan-out delivers only to the entitled', () => {
@@ -99,7 +134,10 @@ test('fan-out delivers only to the entitled', () => {
   const theirsSink: ChangeNotification[] = [];
 
   fanOut(
-    [subscriber([MINE], mineSink), subscriber([THEIRS], theirsSink)],
+    [
+      subscriber({ owned: [MINE], sink: mineSink }),
+      subscriber({ owned: [THEIRS], sink: theirsSink }),
+    ],
     event(),
   );
 
@@ -107,13 +145,69 @@ test('fan-out delivers only to the entitled', () => {
   assert.equal(theirsSink.length, 0);
 });
 
+test('fan-out of a revocation reaches only the owner and the recipients of that enrolment', () => {
+  const owner: ChangeNotification[] = [];
+  const recipient: ChangeNotification[] = [];
+  const bystander: ChangeNotification[] = [];
+  const unrelated: ChangeNotification[] = [];
+
+  fanOut(
+    [
+      subscriber({ owned: [SHARED], sink: owner }),
+      subscriber({ shared: [SHARED], sink: recipient }),
+      subscriber({ owned: [MINE], sink: bystander }),
+      subscriber({ sink: unrelated }),
+    ],
+    consentEvent(SHARED, 'update', true),
+  );
+
+  assert.equal(owner.length, 1);
+  assert.equal(recipient.length, 1);
+  assert.equal(bystander.length, 0);
+  assert.equal(unrelated.length, 0);
+});
+
+test('after a revocation is delivered, the recipient hears nothing more about that enrolment', () => {
+  const sink: ChangeNotification[] = [];
+  const clinician = subscriber({ shared: [SHARED], sink });
+
+  fanOut([clinician], event({ enrolmentId: SHARED }));
+  assert.equal(sink.length, 1, 'a change before the revocation is theirs to hear');
+
+  fanOut([clinician], consentEvent(SHARED, 'update', true));
+  assert.equal(sink.length, 2, 'the revocation itself is delivered');
+
+  fanOut([clinician], event({ enrolmentId: SHARED }));
+  fanOut([clinician], event({ enrolmentId: SHARED, op: 'delete' }));
+  assert.equal(sink.length, 2, 'later changes to a withdrawn record are not');
+});
+
+test('a revocation does not strip an owner of their own enrolment', () => {
+  const sink: ChangeNotification[] = [];
+  const owner = subscriber({ owned: [MINE], sink });
+
+  fanOut([owner], consentEvent(MINE, 'update', true));
+  fanOut([owner], event());
+
+  assert.equal(sink.length, 2, 'the owner still hears changes after a revocation');
+});
+
 test('fan-out reports sockets that have gone', () => {
-  const dead = subscriber([MINE], [], false);
-  const alive = subscriber([MINE]);
+  const dead = subscriber({ owned: [MINE], alive: false });
+  const alive = subscriber({ owned: [MINE] });
 
   const gone = fanOut([dead, alive], event());
 
   assert.deepEqual(gone, [dead]);
+});
+
+test('a payload that is not JSON, or not the contract, is dropped rather than thrown', () => {
+  assert.equal(parseNotification('{not json'), null);
+  assert.equal(parseNotification('{"enrolmentId":"x"}'), null);
+  assert.equal(parseNotification('null'), null);
+
+  const good = parseNotification(JSON.stringify(event()));
+  assert.deepEqual(good, event());
 });
 
 test('an SSE frame is terminated', () => {

@@ -25,11 +25,28 @@ export const changeNotification = z.object({
 
 export type ChangeNotification = z.infer<typeof changeNotification>;
 
-/** One connected client. */
+/** The one table whose events are about *who may see* rather than *what changed*. */
+const CONSENT_TABLE = 'programme.sharing_consent';
+
+/**
+ * One connected client.
+ *
+ * Two sets, not one, because the two relationships are different in the one
+ * place it matters. An enrolment a subscriber *owns* stays theirs however many
+ * consents come and go. An enrolment *shared with* them is theirs only while a
+ * consent says so, and the stream has to stop talking about it the moment that
+ * consent is revoked.
+ */
 export interface Subscriber {
   readonly accountId: string;
-  /** Enrolments this subscriber may hear about, resolved when it connected. */
-  readonly enrolmentIds: ReadonlySet<string>;
+  /** Enrolments this account owns, resolved when it connected. */
+  readonly owned: ReadonlySet<string>;
+  /**
+   * Enrolments shared with this account by a live consent, resolved when it
+   * connected. Mutable on purpose: [fanOut] removes an enrolment from it when a
+   * revocation for that enrolment has been delivered.
+   */
+  readonly shared: Set<string>;
   /** Written to the socket. Returns false once the socket is gone. */
   readonly send: (event: ChangeNotification) => boolean;
 }
@@ -37,31 +54,41 @@ export interface Subscriber {
 /**
  * Decides whether one subscriber hears one notification.
  *
- * The allow-list is resolved once, at connect, from enrolments the account owns
- * plus enrolments a live consent names them as recipient of. Two consequences,
- * and the second is why the consent case is handled specially:
+ * Only the owning account hears about an enrolment's changes, plus any account a
+ * live consent names as a recipient of that enrolment. The allow-lists are
+ * resolved once, at connect, under the caller's own principal. Consequences:
  *
  *   * A subscriber cannot hear about an enrolment that was not theirs when the
- *     stream opened. Joining a programme mid-stream means reconnecting, which
- *     is cheap and fails closed.
+ *     stream opened. Joining a programme or being granted a share mid-stream
+ *     means reconnecting, which is cheap and fails closed.
  *
- *   * A *revocation* must still reach them, precisely because it is the event
- *     that removes their access. Dropping it as "not yours any more" would
- *     leave a clinician console showing a record the person has just withdrawn,
- *     which is the failure `for-clinicians.astro` names: "revocation is
- *     enforced rather than merely recorded".
+ *   * A consent event is not a change to somebody's record, it is a statement
+ *     about who may see it. Two different parties are entitled to it, for two
+ *     different reasons:
+ *       - the *owner*, who is told of every grant and revocation on their own
+ *         enrolment;
+ *       - a *recipient*, and only about a **revocation** on an enrolment they
+ *         currently hold — because it is the event that removes their access,
+ *         and dropping it would leave a clinician console showing a record the
+ *         person has just withdrawn ("revocation is enforced rather than merely
+ *         recorded", `for-clinicians.astro`).
+ *     Nobody else hears either. This function used to deliver *every*
+ *     revocation, for *every* enrolment, to *every* connected subscriber
+ *     (R-033): the exemption was written for "a subscriber who just lost
+ *     access" and applied to a subscriber who never had any. A grant, by the
+ *     same reasoning, is the owner's alone — a co-recipient learning that
+ *     somebody else was just granted a share is itself a disclosure.
  */
 export function shouldDeliver(
   subscriber: Subscriber,
   event: ChangeNotification,
 ): boolean {
-  if (subscriber.enrolmentIds.has(event.enrolmentId)) return true;
+  if (subscriber.owned.has(event.enrolmentId)) return true;
+  if (!subscriber.shared.has(event.enrolmentId)) return false;
 
-  // Not currently theirs — the only thing they may still be told is that a
-  // consent naming that enrolment was revoked, so they can close the view.
-  return (
-    event.table === 'programme.sharing_consent' && event.revoked === true
-  );
+  // A recipient of this enrolment. Record changes are theirs to hear while the
+  // consent lives; of the consent's own events, only the one that ends it.
+  return event.table !== CONSENT_TABLE || event.revoked === true;
 }
 
 /**
@@ -70,6 +97,14 @@ export function shouldDeliver(
  * Returns the subscribers whose socket has gone, so the caller can forget them.
  * A send failure is not an error here: a client closing a laptop lid is the
  * ordinary case, not an exception.
+ *
+ * A revocation that reaches a recipient also removes the enrolment from what
+ * they may hear about. Without that, the stream would go on announcing every
+ * later change to a record the person has withdrawn — metadata only, since a
+ * notification carries no row, but metadata about a record the recipient is no
+ * longer entitled to. An event does not say *whose* consent was revoked, so a
+ * co-recipient whose own consent is still live is dropped too; they reconnect
+ * and re-resolve, which is the fail-closed direction.
  */
 export function fanOut(
   subscribers: Iterable<Subscriber>,
@@ -79,8 +114,36 @@ export function fanOut(
   for (const subscriber of subscribers) {
     if (!shouldDeliver(subscriber, event)) continue;
     if (!subscriber.send(event)) dead.push(subscriber);
+
+    if (
+      event.table === CONSENT_TABLE &&
+      event.revoked === true &&
+      !subscriber.owned.has(event.enrolmentId)
+    ) {
+      subscriber.shared.delete(event.enrolmentId);
+    }
   }
   return dead;
+}
+
+/**
+ * The payload of a `tether_change` notification, or null.
+ *
+ * `JSON.parse` throws on text that is not JSON, and an exception inside a
+ * `notification` listener is an uncaught one — which `@tether/core`'s server
+ * treats as fatal. A bad payload means a trigger and this service disagree
+ * about the contract; that is worth a log line and not worth taking down every
+ * open stream.
+ */
+export function parseNotification(payload: string): ChangeNotification | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  const parsed = changeNotification.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Formats one event as an SSE frame. */
