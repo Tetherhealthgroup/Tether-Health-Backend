@@ -192,7 +192,8 @@ services:
       <<: *service-env
       SERVICE_NAME: api-gateway
       PORT: '8000'
-      DATABASE_URL: ${GATEWAY_DATABASE_URL}
+      # No DATABASE_URL: the gateway holds no data, and a DSN it never uses is a
+      # credential for the one public-facing service to leak.
       REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/0
       # Where the gateway forwards to. Container names on the compose network;
       # none of these is resolvable from the host, which is the point.
@@ -424,6 +425,10 @@ services:
       <<: *service-env
       SERVICE_NAME: realtime-service
       PORT: '8009'
+      # Its own login role (`tether_realtime_login`, db/ROLES.md). It also holds a
+      # LISTEN connection on this same DSN, so it must be a direct or session
+      # connection, never a transaction pooler.
+      DATABASE_URL: ${REALTIME_DATABASE_URL}
       SSE_HEARTBEAT_SECONDS: ${SSE_HEARTBEAT_SECONDS:-25}
       SSE_MAX_SUBSCRIBERS: ${SSE_MAX_SUBSCRIBERS:-2000}
     expose:
