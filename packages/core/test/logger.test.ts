@@ -88,3 +88,57 @@ test('a row-bearing field on a wrapped cause does not surface either', () => {
   // starts copying them fails here instead of in a log index.
   assert.ok(!JSON.stringify(out).includes('a@example.test'));
 });
+
+test('metric keys and readings are redacted at the top level of a log object too', () => {
+  // pino's `*.key` matches one level down only, so a handler that wrote
+  // `log.info({ metricKey })` bypassed the list. Both spellings are listed now.
+  const { logger, lines } = capture();
+
+  logger.info(
+    { metricKey: 'zz_top_metric', metric_key: 'zz_top_snake', value_num: '8.8', dosage: '5 zz', conditionKind: 'zz_kind' },
+    'recorded',
+  );
+
+  const line = lines().join('\n');
+  for (const secret of ['zz_top_metric', 'zz_top_snake', '8.8', '5 zz', 'zz_kind']) {
+    assert.ok(!line.includes(secret), `the log line still contains "${secret}"`);
+  }
+});
+
+test('a refusal\'s context does not name the programme or the enrolment', () => {
+  const { logger, lines } = capture();
+
+  logger.info(
+    { type: 'x', status: 403, context: { areaId: 'zz_programme', enrolmentId: 'zz_enrolment' } },
+    'request refused',
+  );
+
+  const line = lines().join('\n');
+  assert.ok(!line.includes('zz_programme'));
+  assert.ok(!line.includes('zz_enrolment'));
+  assert.match(line, /request refused/);
+});
+
+test('row-bearing fields are stripped from an error kept inside another error, and from an AggregateError', () => {
+  const pgError = (detail: string) =>
+    Object.assign(new Error('constraint violated'), { code: '23505', detail, where: `ctx ${detail}` });
+
+  // A wrapper that keeps the driver's error as a property, as some ORMs do.
+  const wrapped = Object.assign(new Error('wrapped'), { original: pgError('zz_row_one') });
+  const aggregate = new AggregateError([pgError('zz_row_two'), wrapped], 'several failed');
+
+  const { logger, lines } = capture();
+  logger.error({ err: aggregate }, 'request failed');
+
+  const line = lines().join('\n');
+  assert.ok(!line.includes('zz_row_one'), 'a nested error leaked its row');
+  assert.ok(!line.includes('zz_row_two'), 'an AggregateError member leaked its row');
+  // The useful part survives.
+  assert.match(line, /23505/);
+});
+
+test('a cyclic error does not hang or throw the logger', () => {
+  const error: Error & { self?: unknown } = new Error('cyclic');
+  error.self = error;
+  assert.doesNotThrow(() => serializeError(error));
+});

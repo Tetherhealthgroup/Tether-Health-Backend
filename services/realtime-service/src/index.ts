@@ -1,6 +1,7 @@
 import { Client } from 'pg';
 import { z } from 'zod';
 import {
+  assertAccountId,
   createApp,
   createDatabase,
   createLogger,
@@ -141,8 +142,9 @@ app.get(
     // Resolved once, under the caller's own principal and by the caller's own
     // account: the enrolments they own, and the ones a live consent names them
     // as recipient of. See `allowlist.ts` for why both are asked for by name.
-    const allowlist = await db.withPrincipal(principal.accountId, (tx) =>
-      resolveAllowlist(tx, principal.accountId),
+    const accountId = assertAccountId(principal.accountId);
+    const allowlist = await db.withPrincipal(accountId, (tx) =>
+      resolveAllowlist(tx, accountId),
     );
 
     res.writeHead(200, {
@@ -158,7 +160,7 @@ app.get(
     res.write(': connected\n\n');
 
     const subscriber: Subscriber = {
-      accountId: principal.accountId,
+      accountId,
       owned: allowlist.owned,
       shared: allowlist.shared,
       send: (event) => res.write(toSseFrame(event)),

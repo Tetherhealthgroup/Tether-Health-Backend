@@ -28,7 +28,29 @@ import {
  * description), and `*.email`/`*.phone` — identifiers that make everything else
  * in the line attributable.
  */
+/**
+ * Keys that name or carry what was measured, redacted wherever they sit: at the
+ * top level of a log object and one level down. pino's `*` matches exactly one
+ * level, so each is listed both ways.
+ */
+const SENSITIVE_KEYS = [
+  'metricKey',
+  'metric_key',
+  'measureId',
+  'measure_id',
+  'value_num',
+  'value_text',
+  'dosage',
+  'conditionKind',
+];
+
 const REDACTED = [
+  ...SENSITIVE_KEYS,
+  ...SENSITIVE_KEYS.map((key) => `*.${key}`),
+  // A refusal's `context` names the programme somebody tried to reach, which is
+  // a health category. The request id is what ties the line to anything.
+  'context.areaId',
+  'context.enrolmentId',
   'req.headers.authorization',
   'req.headers.cookie',
   'req.headers["x-api-key"]',
@@ -47,17 +69,6 @@ const REDACTED = [
   '*.note',
   '*.severity',
   '*.recipient',
-  // What was measured, and what it was called. A metric key such as a blood
-  // glucose or a peak-flow reading names a condition, so it is health data
-  // before any value is attached to it.
-  '*.metricKey',
-  '*.metric_key',
-  '*.measureId',
-  '*.measure_id',
-  '*.value_num',
-  '*.value_text',
-  '*.dosage',
-  '*.conditionKind',
 ];
 
 /**
@@ -80,17 +91,48 @@ const ROW_BEARING_ERROR_FIELDS = [
 ] as const;
 
 /**
- * pino's standard error serializer, minus anything that can hold a row.
+ * pino's standard error serializer, minus anything that can hold a row, at every
+ * depth.
+ *
+ * pino's serializer copies the top error's own properties and folds a `cause`
+ * into `message` and `stack`. It does not look inside an own property that is
+ * itself an error or an object (a wrapper that keeps the driver's error as
+ * `original`), and it does not serialise `AggregateError.errors` at all. Both
+ * are walked here, so a row-bearing field is removed wherever it sits.
  *
  * Exported so a test can assert on the serializer directly rather than through
  * a log line.
  */
 export function serializeError(error: unknown): unknown {
-  const serialised = stdSerializers.err(error as Error) as unknown as Record<string, unknown>;
-  for (const field of ROW_BEARING_ERROR_FIELDS) {
-    delete serialised[field];
+  return scrub(error, new WeakSet(), 0);
+}
+
+const MAX_DEPTH = 6;
+
+function scrub(value: unknown, seen: WeakSet<object>, depth: number): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value) || depth > MAX_DEPTH) return '[Circular]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => scrub(item, seen, depth + 1));
   }
-  return serialised;
+
+  const isError = value instanceof Error;
+  const base = isError
+    ? (stdSerializers.err(value) as unknown as Record<string, unknown>)
+    : { ...(value as Record<string, unknown>) };
+
+  for (const field of ROW_BEARING_ERROR_FIELDS) {
+    delete base[field];
+  }
+  if (isError && value instanceof AggregateError) {
+    base.errors = value.errors.map((inner) => scrub(inner, seen, depth + 1));
+  }
+  for (const key of Object.keys(base)) {
+    base[key] = scrub(base[key], seen, depth + 1);
+  }
+  return base;
 }
 
 export interface LoggerOptions {

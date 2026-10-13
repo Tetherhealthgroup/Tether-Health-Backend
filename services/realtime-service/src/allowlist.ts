@@ -1,4 +1,4 @@
-import type { Transaction } from '@tether/core';
+import { assertAccountId, type Transaction } from '@tether/core';
 
 /**
  * The enrolments one account may hear about, resolved when its stream opens.
@@ -25,16 +25,20 @@ export async function resolveAllowlist(
   tx: Transaction,
   accountId: string,
 ): Promise<Allowlist> {
+  // `recipient_id` is `text` and compared as text, so an upper-case `sub` would
+  // match nothing there while matching the uuid column above. The same
+  // normalisation `withPrincipal` applies to `app.account_id`, applied here too.
+  const account = assertAccountId(accountId);
   const owned = await tx.query<{ id: string }>(
     `SELECT id FROM programme.enrolment WHERE account_id = $1`,
-    [accountId],
+    [account],
   );
 
   const shared = await tx.query<{ enrolment_id: string }>(
     `SELECT DISTINCT enrolment_id
        FROM programme.sharing_consent
       WHERE recipient_id = $1 AND revoked_at IS NULL`,
-    [accountId],
+    [account],
   );
 
   const ownedIds = new Set(owned.map((row) => row.id));

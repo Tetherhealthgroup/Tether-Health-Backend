@@ -59,3 +59,22 @@ test('an enrolment the account owns is never also "shared with" it', async () =>
   assert.deepEqual([...allowlist.owned], [OWN]);
   assert.deepEqual([...allowlist.shared], []);
 });
+
+test('an upper-case account id is normalised before it is compared as text', async () => {
+  // `recipient_id` is text; the policies compare it with the lower-case form of
+  // the setting, so the allow-list must too.
+  const tx = recordingTransaction([]);
+  const upper = ACCOUNT.toUpperCase();
+
+  await resolveAllowlist(tx, upper);
+
+  for (const statement of tx.statements) {
+    assert.deepEqual(statement.params, [ACCOUNT]);
+  }
+});
+
+test('an account id that is not a uuid is refused before any statement runs', async () => {
+  const tx = recordingTransaction([]);
+  await assert.rejects(resolveAllowlist(tx, 'not-a-uuid'), /not a uuid/);
+  assert.equal(tx.statements.length, 0);
+});

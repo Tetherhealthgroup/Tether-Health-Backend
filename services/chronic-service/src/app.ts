@@ -270,7 +270,8 @@ export function createChronicApp(deps: ChronicDeps): Express {
 
       // The reading's id only. Not `metricKey` (`blood_glucose` names a
       // condition), not `value`, not `note`. Core's redaction list also covers
-      // them one level down, as a net for the next handler that forgets.
+      // them, at the top level and one level down, as a net for the next handler
+      // that forgets.
       req.log.info({ vitalId: vital.id }, 'vital recorded');
 
       res.status(201).json(vital);

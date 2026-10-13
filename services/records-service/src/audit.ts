@@ -44,10 +44,12 @@ export interface AuditEvent {
 }
 
 // No `RETURNING`. A `RETURNING` clause makes PostgreSQL apply the table's SELECT
-// policy to the new row, and `audit_event_subject_read` (0010) only lets an
-// account read rows about itself. A clinician's audit row is filed under the
-// *patient's* account, so with a `RETURNING` the append would be refused for
-// exactly the rows this table exists to hold. Nothing used the returned values.
+// policy to the new row as well as the INSERT policy. Both policies agree here
+// — records-service may only write, and only read, rows about the caller's own
+// account (0010, `audit_event_append_records` and `audit_event_subject_read`) —
+// so nothing would break today; but nothing used the returned values, and a
+// `RETURNING` is one more way for a future policy change to turn an append into
+// an error on the very path that records an erasure.
 const INSERT = `
   INSERT INTO ops.audit_event (
     account_id, actor_role, action, resource_type, resource_id,

@@ -192,6 +192,50 @@ test('a revocation does not strip an owner of their own enrolment', () => {
   assert.equal(sink.length, 2, 'the owner still hears changes after a revocation');
 });
 
+function recipient(accountId: string, shared: string[], sink: ChangeNotification[] = []): Subscriber {
+  return { ...subscriber({ shared, sink }), accountId };
+}
+
+test('a revocation that names its recipient reaches that recipient and the owner, and nobody else', () => {
+  const owner: ChangeNotification[] = [];
+  const revoked: ChangeNotification[] = [];
+  const other: ChangeNotification[] = [];
+
+  const kept = recipient('clinician-2', [SHARED], other);
+  fanOut(
+    [subscriber({ owned: [SHARED], sink: owner }), recipient('clinician-1', [SHARED], revoked), kept],
+    { ...consentEvent(SHARED, 'update', true), recipientId: 'clinician-1' },
+  );
+
+  assert.equal(owner.length, 1);
+  assert.equal(revoked.length, 1);
+  assert.equal(other.length, 0, 'another recipient was told somebody else\'s consent was withdrawn');
+  assert.ok(kept.shared.has(SHARED), 'another recipient lost a view they are still entitled to');
+
+  // and their stream carries on
+  fanOut([kept], event({ enrolmentId: SHARED }));
+  assert.equal(other.length, 1);
+});
+
+test('a revocation with no recipient named falls back to every recipient of the enrolment', () => {
+  for (const recipientId of [null, undefined]) {
+    const sink: ChangeNotification[] = [];
+    const clinician = recipient('clinician-1', [SHARED], sink);
+    fanOut([clinician], { ...consentEvent(SHARED, 'update', true), recipientId });
+    assert.equal(sink.length, 1, `recipientId ${String(recipientId)}`);
+    assert.ok(!clinician.shared.has(SHARED));
+  }
+});
+
+test('the payload may carry a recipient on a revocation, and nothing else new', () => {
+  const parsed = changeNotification.parse({
+    ...consentEvent(SHARED, 'update', true),
+    recipientId: 'clinician-1',
+  });
+  assert.equal(parsed.recipientId, 'clinician-1');
+  assert.deepEqual(Object.keys(changeNotification.parse(event())).sort(), ['at', 'enrolmentId', 'op', 'table']);
+});
+
 test('fan-out reports sockets that have gone', () => {
   const dead = subscriber({ owned: [MINE], alive: false });
   const alive = subscriber({ owned: [MINE] });

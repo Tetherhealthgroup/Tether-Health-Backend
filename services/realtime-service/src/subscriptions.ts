@@ -21,6 +21,12 @@ export const changeNotification = z.object({
   at: z.string(),
   /** Present only on a consent change. */
   revoked: z.boolean().optional(),
+  /**
+   * On a revocation, whose consent it was (0012). Null for a consent that names
+   * no recipient, and absent from a notification written before 0012 existed;
+   * both mean "every recipient of the enrolment".
+   */
+  recipientId: z.string().nullable().optional(),
 });
 
 export type ChangeNotification = z.infer<typeof changeNotification>;
@@ -87,8 +93,23 @@ export function shouldDeliver(
   if (!subscriber.shared.has(event.enrolmentId)) return false;
 
   // A recipient of this enrolment. Record changes are theirs to hear while the
-  // consent lives; of the consent's own events, only the one that ends it.
-  return event.table !== CONSENT_TABLE || event.revoked === true;
+  // consent lives; of the consent's own events, only the revocation of *theirs*.
+  if (event.table !== CONSENT_TABLE) return true;
+  return endsAccessOf(subscriber, event);
+}
+
+/**
+ * True when `event` is a revocation that removes `subscriber`'s access.
+ *
+ * With `recipientId` it is exactly the recipient it names: another recipient of
+ * the same enrolment, whose own consent is still live, is neither told nor
+ * dropped. Without one (a consent that names nobody, or a notification from
+ * before the payload carried it) it cannot tell whose, and so means every
+ * recipient — the fail-closed reading, as before.
+ */
+function endsAccessOf(subscriber: Subscriber, event: ChangeNotification): boolean {
+  if (event.revoked !== true) return false;
+  return event.recipientId == null || event.recipientId === subscriber.accountId;
 }
 
 /**
@@ -102,9 +123,9 @@ export function shouldDeliver(
  * they may hear about. Without that, the stream would go on announcing every
  * later change to a record the person has withdrawn — metadata only, since a
  * notification carries no row, but metadata about a record the recipient is no
- * longer entitled to. An event does not say *whose* consent was revoked, so a
- * co-recipient whose own consent is still live is dropped too; they reconnect
- * and re-resolve, which is the fail-closed direction.
+ * longer entitled to. Only the recipient the revocation names is dropped (0012 puts
+ * `recipientId` in the payload), so another recipient of the same enrolment,
+ * whose consent is still live, neither hears of it nor loses their view.
  */
 export function fanOut(
   subscribers: Iterable<Subscriber>,
@@ -117,8 +138,8 @@ export function fanOut(
 
     if (
       event.table === CONSENT_TABLE &&
-      event.revoked === true &&
-      !subscriber.owned.has(event.enrolmentId)
+      !subscriber.owned.has(event.enrolmentId) &&
+      endsAccessOf(subscriber, event)
     ) {
       subscriber.shared.delete(event.enrolmentId);
     }

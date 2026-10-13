@@ -42,6 +42,90 @@ export function assertAccountId(accountId: string): string {
   return accountId.toLowerCase();
 }
 
+/** What `current_user` is allowed to be, as the catalogue reports it. */
+export interface RoleAttributes {
+  readonly rolname: string;
+  readonly rolsuper: boolean;
+  readonly rolbypassrls: boolean;
+}
+
+/**
+ * Why a connection's role may not serve requests, or null when it may.
+ *
+ * Row-level security is the control that keeps one patient's rows from another.
+ * A superuser or a BYPASSRLS role is exempt from every policy, FORCE included, so
+ * a service connected as one has no RLS at all — which is exactly how R-032
+ * happened: every service was handed the project's superuser DSN and nothing in
+ * any service noticed. This is the service noticing.
+ */
+export function privilegedRoleProblem(role: RoleAttributes | undefined): string | null {
+  if (!role) return 'the connected role could not be read from pg_roles';
+  const held = [role.rolsuper ? 'SUPERUSER' : null, role.rolbypassrls ? 'BYPASSRLS' : null].filter(
+    (attribute): attribute is string => attribute !== null,
+  );
+  return held.length === 0
+    ? null
+    : `database role "${role.rolname}" holds ${held.join(' and ')}, which exempts it from row-level security`;
+}
+
+/**
+ * The one explicit, local-development-only way past the check.
+ *
+ * It exists because a laptop running `docker compose` before anybody has created
+ * the per-service roles connects as the container's superuser. It is refused in
+ * production whatever the variable says, requires a value that cannot be set by
+ * accident, and is logged at error level on every check, so it cannot become
+ * invisible.
+ */
+export const PRIVILEGED_ROLE_OVERRIDE = 'TETHER_ALLOW_PRIVILEGED_DB_ROLE';
+export const PRIVILEGED_ROLE_OVERRIDE_VALUE = 'local-development-only';
+
+export interface RoleGuard {
+  /** Resolves true when the connection may serve requests. Never throws. */
+  check(): Promise<boolean>;
+}
+
+export function createRoleGuard(options: {
+  readonly readRole: () => Promise<RoleAttributes | undefined>;
+  readonly logger: Logger;
+  readonly environment?: string;
+  readonly override?: string | undefined;
+}): RoleGuard {
+  const overridden =
+    options.override === PRIVILEGED_ROLE_OVERRIDE_VALUE && options.environment !== 'production';
+  let approved = false;
+
+  return {
+    async check() {
+      if (approved) return true;
+
+      let problem: string | null;
+      try {
+        problem = privilegedRoleProblem(await options.readRole());
+      } catch {
+        // Cannot read it: do not guess. Not ready, and the next probe tries again.
+        return false;
+      }
+      if (problem === null) {
+        // Roles do not gain attributes on a live connection pool without a
+        // reconnect, and the probe runs on every readiness request.
+        approved = true;
+        return true;
+      }
+      if (overridden) {
+        options.logger.error(
+          { override: PRIVILEGED_ROLE_OVERRIDE },
+          `${problem}. Serving anyway because ${PRIVILEGED_ROLE_OVERRIDE} is set. ` +
+            'This must never be set outside local development.',
+        );
+        return true;
+      }
+      options.logger.fatal({ check: 'database role' }, `${problem}. Refusing to report ready.`);
+      return false;
+    },
+  };
+}
+
 export interface DatabaseOptions {
   readonly connectionString: string;
   readonly max: number;
@@ -72,7 +156,10 @@ export interface Database {
    */
   withoutPrincipal<T>(fn: (tx: Transaction) => Promise<T>): Promise<T>;
 
-  /** True when the database answers. Used by readiness, not liveness. */
+  /**
+   * True when the database answers and the role it answers as is subject to RLS.
+   * Used by readiness, not liveness.
+   */
   ping(): Promise<boolean>;
 
   close(): Promise<void>;
@@ -101,6 +188,18 @@ export function createDatabase(options: DatabaseOptions): Database {
     // help this request; failing fast keeps the pool from filling with waiters.
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 30_000,
+  });
+
+  const roleGuard = createRoleGuard({
+    logger: options.logger,
+    environment: process.env.NODE_ENV,
+    override: process.env[PRIVILEGED_ROLE_OVERRIDE],
+    readRole: async () =>
+      (
+        await pool.query<RoleAttributes>(
+          'SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user',
+        )
+      ).rows[0],
   });
 
   pool.on('error', (error) => {
@@ -154,10 +253,13 @@ export function createDatabase(options: DatabaseOptions): Database {
         const client = await pool.connect();
         try {
           await client.query('SELECT 1');
-          return true;
         } finally {
           client.release();
         }
+        // Readiness is "the database answers *and* it is a connection RLS applies
+        // to". A privileged role is reported not-ready, so the orchestrator never
+        // routes a request to a service that would bypass every policy.
+        return await roleGuard.check();
       } catch {
         return false;
       }
