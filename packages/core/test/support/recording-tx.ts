@@ -67,15 +67,20 @@ export function assertScopedTo(
   value: string,
   label = statement.sql.trim().split(/\s+/).slice(0, 6).join(' '),
 ): void {
-  const index = statement.params.indexOf(value);
-  assert.notEqual(index, -1, `${label}: the account is not among the parameters`);
-  const placeholder = `\\$${index + 1}(?![0-9])`;
-  const predicate = new RegExp(
-    `${column.replace('.', '\\.')}\\s*=\\s*${placeholder}|${placeholder}\\s*=\\s*${column.replace('.', '\\.')}`,
-  );
-  assert.match(
-    statement.sql,
-    predicate,
-    `${label}: no \`${column} = $${index + 1}\` predicate`,
+  const indexes = statement.params
+    .map((param, index) => (param === value ? index : -1))
+    .filter((index) => index !== -1);
+  assert.ok(indexes.length > 0, `${label}: the account is not among the parameters`);
+
+  const name = column.replace('.', '\\.');
+  const compared = indexes.some((index) => {
+    const placeholder = `\\$${index + 1}(?![0-9])`;
+    return new RegExp(
+      `${name}\\s*=\\s*${placeholder}|${placeholder}(::\\w+)?\\s*=\\s*${name}`,
+    ).test(statement.sql);
+  });
+  assert.ok(
+    compared,
+    `${label}: no \`${column} = $n\` predicate for the parameter(s) carrying the account (${indexes.map((i) => `$${i + 1}`).join(', ')})`,
   );
 }

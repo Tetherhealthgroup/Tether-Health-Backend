@@ -53,12 +53,16 @@ export interface AuditEvent {
   readonly detail?: Readonly<Record<string, unknown>>;
 }
 
+// No `RETURNING`. A `RETURNING` clause makes PostgreSQL apply the table's SELECT
+// policy to the new row, and `audit_event_subject_read` (0010) only lets an
+// account read rows about itself. A clinician's audit row is filed under the
+// *patient's* account, so with a `RETURNING` the append would be refused for
+// exactly the rows this table exists to hold. Nothing used the returned values.
 const INSERT = `
   INSERT INTO ops.audit_event (
     account_id, actor_role, action, resource_type, resource_id,
     programme_id, request_id, ip_address, user_agent, detail
   ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::inet, $9, $10::jsonb)
-  RETURNING id, occurred_at
 `;
 
 export async function writeAudit(

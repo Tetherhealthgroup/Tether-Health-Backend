@@ -23,16 +23,42 @@ import type {
  * and revoking a consent takes effect on the next one with nothing to
  * invalidate.
  *
- * So the queries below look under-defended — `WHERE enrolment_id = $1` and no
- * mention of the clinician. That is not an omission. The consent join is in the
- * policy, and writing a second copy of it here would invite the two to drift,
- * with the application's copy winning by being the one anybody reads.
+ * Every statement below names the clinician as well, through `LIVE_CONSENT`.
+ * That began as an omission rather than a decision: the first version of this
+ * file leaned on the policy alone, on the reasoning that a second copy of the
+ * consent join would drift from the first. The reasoning missed the case that
+ * matters. `0003`'s `*_own` policies are OR'd with 0005's recipient policies, so
+ * a clinician who is also a patient reads *their own* enrolment through the
+ * first, and a query with no consent predicate of its own would serve it as if
+ * it were a shared one — outside the consent scope, unaudited as a disclosure.
+ * The copy cannot drift far: it is one helper, used by every statement, and the
+ * integration suite runs both against the same database.
  *
  * What this file does not contain, and must never grow: a query that reaches an
  * account, a query that returns two enrolments, or any expression producing a
  * risk, a grade, a score or an interpretation. `no_risk_score`,
  * `no_result_interpretation`, `never_diagnose`.
  */
+
+/**
+ * "This clinician holds a live consent on this enrolment", as a predicate.
+ *
+ * `enrolment` and `clinician` are SQL fragments written in this file — a column
+ * reference and a bind placeholder — never input. With `scope` set, only a
+ * consent of that scope satisfies it: `notes` for anything a person wrote.
+ */
+const LIVE_CONSENT = (
+  enrolment: string,
+  clinician: string,
+  scope?: 'notes',
+): string =>
+  `EXISTS (SELECT 1 FROM programme.sharing_consent consent
+            WHERE consent.enrolment_id = ${enrolment}
+              AND consent.revoked_at IS NULL
+              AND consent.recipient_id = ${clinician}${
+                scope ? `
+              AND consent.scope = '${scope}'` : ''
+              })`;
 
 const iso = (value: Date | string): string =>
   value instanceof Date ? value.toISOString() : new Date(value).toISOString();
@@ -233,8 +259,8 @@ export function createPostgresStore(): CareStore {
       }>(
         `SELECT id, area_id, status, joined_on, account_id
            FROM programme.enrolment
-          WHERE id = $1`,
-        [enrolmentId],
+          WHERE id = $1 AND ${LIVE_CONSENT('programme.enrolment.id', '$2')}`,
+        [enrolmentId, ctx.clinicianId],
       );
       return row
         ? {
@@ -274,8 +300,8 @@ export function createPostgresStore(): CareStore {
            (SELECT max(observed_at) FROM record.observation
              WHERE enrolment_id = $1) AS observations_last_at
          FROM programme.enrolment e
-        WHERE e.id = $1`,
-        [enrolmentId, asOf.toISOString()],
+        WHERE e.id = $1 AND ${LIVE_CONSENT('e.id', '$3')}`,
+        [enrolmentId, asOf.toISOString(), ctx.clinicianId],
       );
 
       // ISO weeks, oldest first. A count per week is a trend; nothing here says
@@ -284,10 +310,10 @@ export function createPostgresStore(): CareStore {
         `SELECT to_char(date_trunc('week', occurred_at), 'IYYY"-W"IW') AS week,
                 count(*)::text AS recorded
            FROM record.lapse_event
-          WHERE enrolment_id = $1
+          WHERE enrolment_id = $1 AND ${LIVE_CONSENT('enrolment_id', '$2')}
           GROUP BY 1
           ORDER BY 1`,
-        [enrolmentId],
+        [enrolmentId, ctx.clinicianId],
       );
 
       return {
@@ -324,9 +350,10 @@ export function createPostgresStore(): CareStore {
                 (array_agg(value_num ORDER BY observed_at DESC))[1]::text AS latest_value
            FROM record.observation
           WHERE enrolment_id = $1 AND value_num IS NOT NULL
+            AND ${LIVE_CONSENT('enrolment_id', '$2')}
           GROUP BY measure_id, unit, source, platform
           ORDER BY measure_id`,
-        [enrolmentId],
+        [enrolmentId, ctx.clinicianId],
       );
 
       const weeks = await ctx.tx.query<MeasureWeekRecord>(
@@ -337,9 +364,10 @@ export function createPostgresStore(): CareStore {
                 max(value_num)::text AS max_value
            FROM record.observation
           WHERE enrolment_id = $1 AND value_num IS NOT NULL
+            AND ${LIVE_CONSENT('enrolment_id', '$2')}
           GROUP BY 1, 2
           ORDER BY 1, 2`,
-        [enrolmentId],
+        [enrolmentId, ctx.clinicianId],
       );
 
       return rows.map(
@@ -379,8 +407,9 @@ export function createPostgresStore(): CareStore {
         `SELECT screen_id, block_index, value #>> '{}' AS value, answered_at
            FROM record.screen_answer
           WHERE enrolment_id = $1 AND kind = 'text'
+            AND ${LIVE_CONSENT('enrolment_id', '$2', 'notes')}
           ORDER BY screen_id, block_index`,
-        [enrolmentId],
+        [enrolmentId, ctx.clinicianId],
       );
       return rows.map(
         (row): NoteRow => ({
@@ -398,10 +427,12 @@ export function createPostgresStore(): CareStore {
         severity: string;
         context: string[];
       }>(
+        // Through `care.lapse_details`, not the table: this role may select a
+        // lapse's date and nothing else from `record.lapse_event` (0011), and
+        // the function returns `severity` and `context` only to a live `notes`
+        // consent that names the caller.
         `SELECT occurred_at, severity, context
-           FROM record.lapse_event
-          WHERE enrolment_id = $1
-          ORDER BY occurred_at DESC`,
+           FROM care.lapse_details($1)`,
         [enrolmentId],
       );
       return rows.map(
@@ -425,8 +456,9 @@ export function createPostgresStore(): CareStore {
         `SELECT measure_id, value_text, unit, observed_at, source, platform
            FROM record.observation
           WHERE enrolment_id = $1 AND value_text IS NOT NULL
+            AND ${LIVE_CONSENT('enrolment_id', '$2', 'notes')}
           ORDER BY observed_at DESC`,
-        [enrolmentId],
+        [enrolmentId, ctx.clinicianId],
       );
       return rows.map(
         (row): TextObservationRow => ({
@@ -456,14 +488,22 @@ export function createPostgresStore(): CareStore {
       // The routing is copied out of the policy and written onto the row rather
       // than referenced. Where a signal went is a historical fact; a policy
       // edited next month changes where the next one goes and rewrites nothing.
+      //
+      // Inserted *from* the clinician's own live consent, so an escalation can
+      // only cite a consent that names the caller and belongs to this
+      // enrolment. Any other consent id produces no row.
       const row = await ctx.tx.one<EscalationRecord>(
         `INSERT INTO care.escalation (
            enrolment_id, raised_by, consent_id, signal, detail,
            policy_area_id, policy_version, routed_to_kind, routed_to, acknowledge_by
-         ) VALUES (
-           $1, $2::uuid, $3, $4, $5,
-           $6, $7, $8, $9, now() + make_interval(mins => $10::int)
          )
+         SELECT c.enrolment_id, $2::uuid, c.id, $4, $5,
+                $6, $7, $8, $9, now() + make_interval(mins => $10::int)
+           FROM programme.sharing_consent c
+          WHERE c.id = $3
+            AND c.enrolment_id = $1
+            AND c.revoked_at IS NULL
+            AND c.recipient_id = $11
          RETURNING id, enrolment_id, signal, detail, policy_area_id, policy_version,
                    routed_to_kind, routed_to, raised_at, acknowledge_by, acknowledged_at`,
         [
@@ -477,6 +517,7 @@ export function createPostgresStore(): CareStore {
           input.policy.recipientKind,
           input.policy.contact,
           input.policy.acknowledgeWithinMinutes,
+          ctx.clinicianId,
         ],
       );
       if (!row) throw new Error('escalation insert returned no row');
@@ -488,9 +529,9 @@ export function createPostgresStore(): CareStore {
         `SELECT id, enrolment_id, signal, detail, policy_area_id, policy_version,
                 routed_to_kind, routed_to, raised_at, acknowledge_by, acknowledged_at
            FROM care.escalation
-          WHERE enrolment_id = $1
+          WHERE enrolment_id = $1 AND ${LIVE_CONSENT('enrolment_id', '$2')}
           ORDER BY raised_at DESC`,
-        [enrolmentId],
+        [enrolmentId, ctx.clinicianId],
       );
       return rows.map(toEscalation);
     },
