@@ -51,3 +51,26 @@ export async function resolveAllowlist(
     ),
   };
 }
+
+/**
+ * Whether a live consent still names `accountId` as recipient of `enrolmentId`.
+ *
+ * Asked after a consent revocation, under the subscriber's own principal, to find
+ * out whether the revocation was theirs: the NOTIFY does not say (R-063). The
+ * account is named in the statement as well as in the policy, as everywhere here.
+ */
+export async function holdsLiveConsent(
+  tx: Transaction,
+  accountId: string,
+  enrolmentId: string,
+): Promise<boolean> {
+  const account = assertAccountId(accountId);
+  const rows = await tx.query(
+    `SELECT 1
+       FROM programme.sharing_consent
+      WHERE enrolment_id = $1 AND recipient_id = $2 AND revoked_at IS NULL
+      LIMIT 1`,
+    [enrolmentId, account],
+  );
+  return rows.length > 0;
+}

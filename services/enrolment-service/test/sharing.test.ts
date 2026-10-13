@@ -95,9 +95,27 @@ test('a wildcard recipient is refused — null already means "any of this kind"'
 test('a named recipient of a known kind is fine', () => {
   const result = SharingRequestSchema.safeParse({
     ...VALID_GRANT,
-    recipientId: 'coach-4417',
+    recipientId: '33333333-3333-4333-8333-333333333333',
   });
   assert.equal(result.success, true, JSON.stringify(issuePaths(result)));
+});
+
+test('R-063: a recipient that is not a lowercase account id is refused, so no name or email is stored', () => {
+  for (const recipientId of [
+    'coach-4417',
+    'someone@example.invalid',
+    'Jane Example',
+    '33333333-3333-4333-8333-33333333333', // one character short
+    '33333333-3333-4333-8333-33333333333G',
+    '33333333-3333-4333-8333-3333333333AB', // upper case
+  ]) {
+    const result = SharingRequestSchema.safeParse({ ...VALID_GRANT, recipientId });
+    assert.equal(result.success, false, `\`${recipientId}\` was accepted`);
+    assert.ok(issuePaths(result).includes('recipientId'));
+  }
+  for (const recipientId of [null, undefined]) {
+    assert.equal(SharingRequestSchema.safeParse({ ...VALID_GRANT, recipientId }).success, true);
+  }
 });
 
 test('scope and recipientKind are closed sets', () => {

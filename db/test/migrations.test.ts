@@ -297,10 +297,26 @@ test('the recipient policies are recreated for the clinician surface only', () =
   }
 });
 
-test('the revocation payload migration replaces only the notify function, with an empty search_path', () => {
+test('the revocation payload migration replaces only the notify function, with an empty search_path, and names no recipient', () => {
   const sql = code('20260914121100_consent_revocation_recipient.sql');
   assert.match(sql, /CREATE OR REPLACE FUNCTION programme\.notify_consent_change\(\)/);
   assert.match(sql, /SET search_path = ''/);
-  assert.match(sql, /'recipientId'/);
-  assert.doesNotMatch(sql, /CREATE TRIGGER|ALTER TABLE|DROP /i);
+  // R-063: the NOTIFY carries no recipient identifier, in any spelling.
+  assert.doesNotMatch(sql, /'recipientId'|'recipient_id'|NEW\.recipient_id|OLD\.recipient_id/);
+  assert.match(sql, /'enrolmentId'/);
+  assert.doesNotMatch(sql, /CREATE TRIGGER|DROP /i);
+});
+
+test('the revocation payload migration constrains recipient_id to a lowercase uuid or NULL, without scanning old rows', () => {
+  const sql = code('20260914121100_consent_revocation_recipient.sql');
+  assert.match(sql, /ALTER TABLE programme\.sharing_consent\s+ADD CONSTRAINT sharing_consent_recipient_id_uuid/);
+  assert.match(sql, /recipient_id IS NULL\s+OR recipient_id ~ '\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$'/);
+  assert.match(sql, /NOT VALID;/);
+});
+
+test('care.lapse_details gives its owner policies of its own and keeps them off every service login', () => {
+  const sql = code('20260914120900_rls_consent_policies.sql');
+  assert.match(sql, /CREATE POLICY sharing_consent_lapse_details ON programme\.sharing_consent FOR SELECT TO %I/);
+  assert.match(sql, /CREATE POLICY lapse_event_lapse_details ON record\.lapse_event FOR SELECT TO %I/);
+  assert.match(sql, /'care\.lapse_details\(uuid\)'::regprocedure/);
 });

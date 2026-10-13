@@ -38,9 +38,9 @@ import {
   setPreference,
   tokensFor,
 } from '../../services/notification-service/src/store.ts';
-import { resolveAllowlist } from '../../services/realtime-service/src/allowlist.ts';
+import { holdsLiveConsent, resolveAllowlist } from '../../services/realtime-service/src/allowlist.ts';
 import {
-  fanOut,
+  dispatch,
   parseNotification,
   type ChangeNotification,
   type Subscriber,
@@ -1766,6 +1766,40 @@ function registerSuite(pg: TestPostgres): void {
   // realtime-service
   // -------------------------------------------------------------------------
 
+  test('R-063: a consent\'s recipient must be a lowercase uuid or NULL, whoever writes it', async () => {
+    await seed(pg);
+    const rejected = ['someone@example.invalid', 'Jane Example', 'coach-4417', CLIN.toUpperCase(), ''];
+    for (const recipient of rejected) {
+      await assert.rejects(
+        pg.admin(
+          `INSERT INTO programme.sharing_consent (enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
+           VALUES ($1, 'notes', 'supporter', $2, 'v1', 'synthetic wording')`,
+          [ENR_C, recipient],
+        ),
+        (error: { code?: string }) => error.code === '23514',
+        `recipient_id ${JSON.stringify(recipient)} was accepted`,
+      );
+    }
+    // A lowercase uuid, and NULL ("any recipient of this kind"), are accepted.
+    await pg.admin(
+      `INSERT INTO programme.sharing_consent (enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
+       VALUES ($1, 'notes', 'care_team', $2, 'v1', 'synthetic wording'), ($1, 'totals_and_adherence', 'care_team', NULL, 'v1', 'synthetic wording')`,
+      [ENR_C, STRANGER],
+    );
+    // And the service role that writes consents is held to it too.
+    await assert.rejects(
+      pg.databaseFor('enrolment').withPrincipal(CLIN, (tx) =>
+        tx.query(
+          `INSERT INTO programme.sharing_consent (enrolment_id, scope, recipient_kind, recipient_id, consent_version, consent_text)
+           VALUES ($1, 'notes', 'supporter', 'someone@example.invalid', 'v1', 'synthetic wording')`,
+          [ENR_C],
+        ),
+      ),
+      (error: { code?: string }) => error.code === '23514',
+      'the enrolment service wrote a non-uuid recipient',
+    );
+  });
+
   test('realtime: the allow-list is the account\'s own enrolments plus those a live consent names it recipient of', async () => {
     await seed(pg);
     const db = pg.databaseFor('realtime');
@@ -1785,7 +1819,9 @@ function registerSuite(pg: TestPostgres): void {
     await seed(pg);
     const db = pg.databaseFor('realtime');
     const received: ChangeNotification[] = [];
+    const rawPayloads: string[] = [];
     const stop = await pg.listen('realtime', 'tether_change', (payload) => {
+      rawPayloads.push(payload);
       const parsed = parseNotification(payload);
       if (parsed) received.push(parsed);
     });
@@ -1813,8 +1849,14 @@ function registerSuite(pg: TestPostgres): void {
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
     };
-    const deliverNew = (from: number): void => {
-      for (const event of received.slice(from)) fanOut(subscribers, event);
+    // The real settle step: a revocation is resolved per recipient by asking the
+    // database, under that recipient's own principal, whether their consent lives.
+    const deliverNew = async (from: number): Promise<void> => {
+      for (const event of received.slice(from)) {
+        await dispatch(subscribers, event, (account, enrolment) =>
+          db.withPrincipal(account, (tx) => holdsLiveConsent(tx, account, enrolment)),
+        );
+      }
     };
     const heard = (account: string): string[] => (sinks.get(account) ?? []).map((e) => `${e.table}:${e.op}${e.revoked === undefined ? '' : e.revoked ? ':revoked' : ':granted'}`);
 
@@ -1822,7 +1864,7 @@ function registerSuite(pg: TestPostgres): void {
       // A change to A's record.
       await pg.admin(`INSERT INTO record.observation (enrolment_id, measure_id, value_num, unit, observed_at) VALUES ('${ENR_A}', 'craving_intensity', 1, 'score', now())`);
       await waitFor(1);
-      deliverNew(0);
+      await deliverNew(0);
       assert.deepEqual(heard(A), ['record.observation:insert']);
       assert.deepEqual(heard(CLIN), ['record.observation:insert'], 'a recipient with a live consent hears changes');
       assert.deepEqual(heard(CLIN2), ['record.observation:insert']);
@@ -1832,7 +1874,7 @@ function registerSuite(pg: TestPostgres): void {
       // A change to B's record: only B.
       await pg.admin(`INSERT INTO record.observation (enrolment_id, measure_id, value_num, unit, observed_at) VALUES ('${ENR_B}', 'craving_intensity', 1, 'score', now())`);
       await waitFor(2);
-      deliverNew(1);
+      await deliverNew(1);
       assert.deepEqual(heard(B), ['record.observation:insert']);
       assert.deepEqual(heard(A).length, 1);
       assert.deepEqual(heard(CLIN).length, 1, 'CLIN\'s consent on B is revoked; it must not hear B\'s record');
@@ -1841,18 +1883,20 @@ function registerSuite(pg: TestPostgres): void {
       // consent on that enrolment hear it. B, who has no part in it, does not.
       await pg.admin(`UPDATE programme.sharing_consent SET revoked_at = now() WHERE id = '${CONSENT_CLIN_TOTALS}'`);
       await waitFor(3);
-      deliverNew(2);
+      await deliverNew(2);
       assert.ok(heard(A).includes('programme.sharing_consent:update:revoked'), 'the owner was not told');
       assert.ok(heard(CLIN).includes('programme.sharing_consent:update:revoked'), 'the recipient was not told its access ended');
       assert.deepEqual(heard(B).filter((h) => h.startsWith('programme.sharing_consent')), [], 'a stranger heard a consent revocation');
       assert.deepEqual(heard(CLIN2).filter((h) => h.startsWith('programme.sharing_consent')), [], 'another recipient was told somebody else\'s consent was withdrawn');
       assert.deepEqual(heard(STRANGER), [], 'an unrelated account heard a consent revocation');
+      // R-063: the NOTIFY itself names no recipient, only the enrolment.
+      assert.ok(rawPayloads.every((p) => !/recipient/i.test(p) && !p.includes(CLIN)), 'a recipient identifier was broadcast on tether_change');
 
       // After the revocation, CLIN hears nothing more about A's record...
       const before = heard(CLIN).length;
       await pg.admin(`INSERT INTO record.observation (enrolment_id, measure_id, value_num, unit, observed_at) VALUES ('${ENR_A}', 'craving_intensity', 2, 'score', now())`);
       await waitFor(4);
-      deliverNew(3);
+      await deliverNew(3);
       assert.equal(heard(CLIN).length, before, 'a withdrawn record is still being announced to its former recipient');
       // ...and the owner still does.
       assert.equal(heard(A).filter((h) => h === 'record.observation:insert').length, 2);

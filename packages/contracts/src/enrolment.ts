@@ -184,6 +184,8 @@ const GLOBAL_GRANT_MESSAGE =
  * A wildcard string on top of that is a second way to say the same thing, and
  * two ways to say a thing is how one of them escapes review.
  */
+const LOWERCASE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
 const WILDCARD_RECIPIENTS = new Set(['*', 'all', 'any', 'everyone']);
 
 const SharingRequestShape = z.object({
@@ -199,8 +201,19 @@ const SharingRequestShape = z.object({
   scope: SharingScopeSchema,
   recipientKind: RecipientKindSchema,
 
-  /** Null or absent means "any recipient of this kind". See [WILDCARD_RECIPIENTS]. */
-  recipientId: z.string().min(1).max(128).nullish(),
+  /**
+   * The recipient's account id, a lowercase uuid. Null or absent means "any
+   * recipient of this kind". See [WILDCARD_RECIPIENTS].
+   *
+   * Not free text (R-063): every policy compares it with the caller's account id,
+   * so anything else can never match anyone, and the column is readable by
+   * roles that have no business holding a name or an email. The database has the
+   * same rule as a CHECK (`sharing_consent_recipient_id_uuid`).
+   */
+  recipientId: z
+    .string()
+    .regex(LOWERCASE_UUID, 'recipientId must be a lowercase account id (uuid)')
+    .nullish(),
 
   /** Required when granting — see [SharingConsentSchema.consentText]. */
   consentVersion: z.string().min(1).max(64).optional(),

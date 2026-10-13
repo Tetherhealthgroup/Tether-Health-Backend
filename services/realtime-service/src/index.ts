@@ -14,9 +14,9 @@ import {
   setProblemBase,
   start,
 } from '@tether/core';
-import { resolveAllowlist } from './allowlist.ts';
+import { holdsLiveConsent, resolveAllowlist } from './allowlist.ts';
 import {
-  fanOut,
+  dispatch,
   parseNotification,
   toSseFrame,
   type Subscriber,
@@ -103,9 +103,19 @@ async function startListening(): Promise<void> {
       return;
     }
 
-    for (const gone of fanOut(subscribers, parsed)) {
-      subscribers.delete(gone);
-    }
+    // `dispatch` serves the owner and holds recipients back synchronously, then
+    // settles a revocation with one read per recipient. A failure there is
+    // already treated as "revoked" inside; this catch is for the unexpected.
+    dispatch(subscribers, parsed, (accountId, enrolmentId) =>
+      db.withPrincipal(accountId, (tx) => holdsLiveConsent(tx, accountId, enrolmentId)),
+    ).then(
+      (dead) => {
+        for (const gone of dead) subscribers.delete(gone);
+      },
+      (error: unknown) => {
+        logger.error({ err: error }, 'dispatching a change notification failed');
+      },
+    );
   });
 
   listener.on('error', (error) => {

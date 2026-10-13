@@ -21,12 +21,6 @@ export const changeNotification = z.object({
   at: z.string(),
   /** Present only on a consent change. */
   revoked: z.boolean().optional(),
-  /**
-   * On a revocation, whose consent it was (0012). Null for a consent that names
-   * no recipient, and absent from a notification written before 0012 existed;
-   * both mean "every recipient of the enrolment".
-   */
-  recipientId: z.string().nullable().optional(),
 });
 
 export type ChangeNotification = z.infer<typeof changeNotification>;
@@ -58,7 +52,7 @@ export interface Subscriber {
 }
 
 /**
- * Decides whether one subscriber hears one notification.
+ * Decides whether one subscriber hears one notification, *synchronously*.
  *
  * Only the owning account hears about an enrolment's changes, plus any account a
  * live consent names as a recipient of that enrolment. The allow-lists are
@@ -69,21 +63,15 @@ export interface Subscriber {
  *     means reconnecting, which is cheap and fails closed.
  *
  *   * A consent event is not a change to somebody's record, it is a statement
- *     about who may see it. Two different parties are entitled to it, for two
- *     different reasons:
- *       - the *owner*, who is told of every grant and revocation on their own
- *         enrolment;
- *       - a *recipient*, and only about a **revocation** on an enrolment they
- *         currently hold — because it is the event that removes their access,
- *         and dropping it would leave a clinician console showing a record the
- *         person has just withdrawn ("revocation is enforced rather than merely
- *         recorded", `for-clinicians.astro`).
- *     Nobody else hears either. This function used to deliver *every*
- *     revocation, for *every* enrolment, to *every* connected subscriber
- *     (R-033): the exemption was written for "a subscriber who just lost
- *     access" and applied to a subscriber who never had any. A grant, by the
- *     same reasoning, is the owner's alone — a co-recipient learning that
- *     somebody else was just granted a share is itself a disclosure.
+ *     about who may see it. The *owner* is told of every grant and revocation on
+ *     their own enrolment. A *recipient* is told of a revocation on an enrolment
+ *     they currently hold only if it is *theirs* ("revocation is enforced rather
+ *     than merely recorded", `for-clinicians.astro`), and that is decided by
+ *     [dispatch], not here: the notification does not say whose consent it was
+ *     (R-063, 0012), so it takes a database read to know. This function
+ *     therefore never delivers a consent event to a recipient. Nobody else hears
+ *     either. A grant is the owner's alone: a co-recipient learning that somebody
+ *     else was just granted a share is itself a disclosure.
  */
 export function shouldDeliver(
   subscriber: Subscriber,
@@ -93,39 +81,17 @@ export function shouldDeliver(
   if (!subscriber.shared.has(event.enrolmentId)) return false;
 
   // A recipient of this enrolment. Record changes are theirs to hear while the
-  // consent lives; of the consent's own events, only the revocation of *theirs*.
-  if (event.table !== CONSENT_TABLE) return true;
-  return endsAccessOf(subscriber, event);
+  // consent lives; consent events are settled by [dispatch].
+  return event.table !== CONSENT_TABLE;
 }
 
 /**
- * True when `event` is a revocation that removes `subscriber`'s access.
- *
- * With `recipientId` it is exactly the recipient it names: another recipient of
- * the same enrolment, whose own consent is still live, is neither told nor
- * dropped. Without one (a consent that names nobody, or a notification from
- * before the payload carried it) it cannot tell whose, and so means every
- * recipient — the fail-closed reading, as before.
- */
-function endsAccessOf(subscriber: Subscriber, event: ChangeNotification): boolean {
-  if (event.revoked !== true) return false;
-  return event.recipientId == null || event.recipientId === subscriber.accountId;
-}
-
-/**
- * Fans one notification out to everyone entitled to it.
+ * Fans one notification out to everyone entitled to it, without a database read.
  *
  * Returns the subscribers whose socket has gone, so the caller can forget them.
  * A send failure is not an error here: a client closing a laptop lid is the
- * ordinary case, not an exception.
- *
- * A revocation that reaches a recipient also removes the enrolment from what
- * they may hear about. Without that, the stream would go on announcing every
- * later change to a record the person has withdrawn — metadata only, since a
- * notification carries no row, but metadata about a record the recipient is no
- * longer entitled to. Only the recipient the revocation names is dropped (0012 puts
- * `recipientId` in the payload), so another recipient of the same enrolment,
- * whose consent is still live, neither hears of it nor loses their view.
+ * ordinary case, not an exception. Consent revocations for recipients are not
+ * handled here; use [dispatch], which is what the service calls.
  */
 export function fanOut(
   subscribers: Iterable<Subscriber>,
@@ -135,15 +101,68 @@ export function fanOut(
   for (const subscriber of subscribers) {
     if (!shouldDeliver(subscriber, event)) continue;
     if (!subscriber.send(event)) dead.push(subscriber);
+  }
+  return dead;
+}
 
-    if (
-      event.table === CONSENT_TABLE &&
-      !subscriber.owned.has(event.enrolmentId) &&
-      endsAccessOf(subscriber, event)
-    ) {
-      subscriber.shared.delete(event.enrolmentId);
+/** Whether a live consent still names `accountId` as recipient of `enrolmentId`. */
+export type HoldsLiveConsent = (accountId: string, enrolmentId: string) => Promise<boolean>;
+
+/**
+ * Delivers one notification, settling who a revocation concerns.
+ *
+ * The revocation payload carries no recipient (R-063), so for each *recipient*
+ * of the enrolment the question "was it theirs?" is answered by asking whether a
+ * live consent still names them. The order matters and fails closed:
+ *
+ *   1. Synchronously, before any await: every recipient of the enrolment is
+ *      removed from it ("held back") and the owner and every other subscriber
+ *      are served. From this point no later change to that enrolment reaches a
+ *      held-back recipient, whatever the check says.
+ *   2. Then, for each held-back recipient: a live consent still names them, so
+ *      the revocation was someone else's. They are told nothing and the
+ *      enrolment is put back. None does, so it was theirs: they are told, and the
+ *      enrolment stays removed.
+ *   3. A check that throws counts as "no live consent": the recipient is told and
+ *      dropped, and reconnects. A failed lookup never leaves access in place.
+ *
+ * The cost of the held-back window is that a co-recipient whose consent is live
+ * may miss a record change that arrives while the check runs (milliseconds). The
+ * client re-reads on reconnect, and the alternative is delivering metadata about
+ * a withdrawn record.
+ *
+ * Returns the subscribers whose socket has gone. Only a revocation is async.
+ */
+export async function dispatch(
+  subscribers: Iterable<Subscriber>,
+  event: ChangeNotification,
+  holdsLiveConsent: HoldsLiveConsent,
+): Promise<Subscriber[]> {
+  const heldBack: Subscriber[] = [];
+  if (event.table === CONSENT_TABLE && event.revoked === true) {
+    for (const subscriber of subscribers) {
+      if (subscriber.owned.has(event.enrolmentId)) continue;
+      if (subscriber.shared.delete(event.enrolmentId)) heldBack.push(subscriber);
     }
   }
+
+  const dead = fanOut(subscribers, event);
+
+  await Promise.all(
+    heldBack.map(async (subscriber) => {
+      let stillHolds: boolean;
+      try {
+        stillHolds = await holdsLiveConsent(subscriber.accountId, event.enrolmentId);
+      } catch {
+        stillHolds = false;
+      }
+      if (stillHolds) {
+        subscriber.shared.add(event.enrolmentId);
+      } else if (!subscriber.send(event)) {
+        dead.push(subscriber);
+      }
+    }),
+  );
   return dead;
 }
 

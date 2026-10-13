@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   changeNotification,
+  dispatch,
   fanOut,
   parseNotification,
   shouldDeliver,
@@ -103,12 +104,12 @@ test('R-033: a revocation on someone else\'s enrolment is not broadcast to a str
   assert.equal(shouldDeliver(subscriber(), revocation), false);
 });
 
-test('a revocation reaches the recipient it removes access from', () => {
-  // The case that has to be special. A clinician's console is showing a record
-  // the person has just withdrawn, and this is the event that tells it to close.
+test('a recipient is never handed a consent event synchronously; dispatch settles it', () => {
+  // The payload does not say whose consent was revoked (R-063), so whether the
+  // event is the recipient's is a database read, and that is dispatch's job.
   const clinician = subscriber({ shared: [SHARED] });
 
-  assert.equal(shouldDeliver(clinician, consentEvent(SHARED, 'update', true)), true);
+  assert.equal(shouldDeliver(clinician, consentEvent(SHARED, 'update', true)), false);
 });
 
 test('a revocation reaches the owner of the enrolment', () => {
@@ -145,16 +146,16 @@ test('fan-out delivers only to the entitled', () => {
   assert.equal(theirsSink.length, 0);
 });
 
-test('fan-out of a revocation reaches only the owner and the recipients of that enrolment', () => {
+test('fan-out of a revocation reaches the owner only; recipients are settled by dispatch', () => {
   const owner: ChangeNotification[] = [];
-  const recipient: ChangeNotification[] = [];
+  const recipientSink: ChangeNotification[] = [];
   const bystander: ChangeNotification[] = [];
   const unrelated: ChangeNotification[] = [];
 
   fanOut(
     [
       subscriber({ owned: [SHARED], sink: owner }),
-      subscriber({ shared: [SHARED], sink: recipient }),
+      subscriber({ shared: [SHARED], sink: recipientSink }),
       subscriber({ owned: [MINE], sink: bystander }),
       subscriber({ sink: unrelated }),
     ],
@@ -162,32 +163,33 @@ test('fan-out of a revocation reaches only the owner and the recipients of that 
   );
 
   assert.equal(owner.length, 1);
-  assert.equal(recipient.length, 1);
+  assert.equal(recipientSink.length, 0);
   assert.equal(bystander.length, 0);
   assert.equal(unrelated.length, 0);
 });
 
-test('after a revocation is delivered, the recipient hears nothing more about that enrolment', () => {
+test('after a revocation is delivered, the recipient hears nothing more about that enrolment', async () => {
   const sink: ChangeNotification[] = [];
   const clinician = subscriber({ shared: [SHARED], sink });
+  const none = async () => false;
 
-  fanOut([clinician], event({ enrolmentId: SHARED }));
+  await dispatch([clinician], event({ enrolmentId: SHARED }), none);
   assert.equal(sink.length, 1, 'a change before the revocation is theirs to hear');
 
-  fanOut([clinician], consentEvent(SHARED, 'update', true));
+  await dispatch([clinician], consentEvent(SHARED, 'update', true), none);
   assert.equal(sink.length, 2, 'the revocation itself is delivered');
 
-  fanOut([clinician], event({ enrolmentId: SHARED }));
-  fanOut([clinician], event({ enrolmentId: SHARED, op: 'delete' }));
+  await dispatch([clinician], event({ enrolmentId: SHARED }), none);
+  await dispatch([clinician], event({ enrolmentId: SHARED, op: 'delete' }), none);
   assert.equal(sink.length, 2, 'later changes to a withdrawn record are not');
 });
 
-test('a revocation does not strip an owner of their own enrolment', () => {
+test('a revocation does not strip an owner of their own enrolment', async () => {
   const sink: ChangeNotification[] = [];
   const owner = subscriber({ owned: [MINE], sink });
 
-  fanOut([owner], consentEvent(MINE, 'update', true));
-  fanOut([owner], event());
+  await dispatch([owner], consentEvent(MINE, 'update', true), async () => false);
+  await dispatch([owner], event(), async () => false);
 
   assert.equal(sink.length, 2, 'the owner still hears changes after a revocation');
 });
@@ -196,43 +198,101 @@ function recipient(accountId: string, shared: string[], sink: ChangeNotification
   return { ...subscriber({ shared, sink }), accountId };
 }
 
-test('a revocation that names its recipient reaches that recipient and the owner, and nobody else', () => {
+test('R-063: a revocation reaches the owner and the recipient whose consent ended, and not one whose consent is live', async () => {
   const owner: ChangeNotification[] = [];
   const revoked: ChangeNotification[] = [];
   const other: ChangeNotification[] = [];
 
   const kept = recipient('clinician-2', [SHARED], other);
-  fanOut(
-    [subscriber({ owned: [SHARED], sink: owner }), recipient('clinician-1', [SHARED], revoked), kept],
-    { ...consentEvent(SHARED, 'update', true), recipientId: 'clinician-1' },
+  const lost = recipient('clinician-1', [SHARED], revoked);
+  const asked: string[] = [];
+  // Only clinician-2 still holds a live consent. The lookup is the only source
+  // of that fact: the notification names nobody.
+  const holds = async (accountId: string, enrolmentId: string) => {
+    asked.push(`${accountId}:${enrolmentId}`);
+    return accountId === 'clinician-2';
+  };
+
+  const dead = await dispatch(
+    [subscriber({ owned: [SHARED], sink: owner }), lost, kept],
+    consentEvent(SHARED, 'update', true),
+    holds,
   );
 
+  assert.deepEqual(dead, []);
+  assert.deepEqual(asked.sort(), [`clinician-1:${SHARED}`, `clinician-2:${SHARED}`]);
   assert.equal(owner.length, 1);
   assert.equal(revoked.length, 1);
-  assert.equal(other.length, 0, 'another recipient was told somebody else\'s consent was withdrawn');
+  assert.equal(other.length, 0, "another recipient was told somebody else's consent was withdrawn");
+  assert.ok(!lost.shared.has(SHARED), 'the revoked recipient kept the enrolment');
   assert.ok(kept.shared.has(SHARED), 'another recipient lost a view they are still entitled to');
 
-  // and their stream carries on
-  fanOut([kept], event({ enrolmentId: SHARED }));
-  assert.equal(other.length, 1);
+  await dispatch([kept], event({ enrolmentId: SHARED }), holds);
+  assert.equal(other.length, 1, 'their stream carries on');
 });
 
-test('a revocation with no recipient named falls back to every recipient of the enrolment', () => {
-  for (const recipientId of [null, undefined]) {
-    const sink: ChangeNotification[] = [];
-    const clinician = recipient('clinician-1', [SHARED], sink);
-    fanOut([clinician], { ...consentEvent(SHARED, 'update', true), recipientId });
-    assert.equal(sink.length, 1, `recipientId ${String(recipientId)}`);
-    assert.ok(!clinician.shared.has(SHARED));
-  }
+test('R-063: a recipient is held back before the lookup resolves, so nothing leaks while it runs', async () => {
+  const sink: ChangeNotification[] = [];
+  const clinician = recipient('clinician-1', [SHARED], sink);
+  let release: (value: boolean) => void = () => undefined;
+  const pending = dispatch(
+    [clinician],
+    consentEvent(SHARED, 'update', true),
+    () =>
+      new Promise<boolean>((resolve) => {
+        release = resolve;
+      }),
+  );
+
+  // The check is still running: a record change must not reach them.
+  assert.ok(!clinician.shared.has(SHARED), 'not held back synchronously');
+  await dispatch([clinician], event({ enrolmentId: SHARED }), async () => true);
+  assert.equal(sink.length, 0);
+
+  release(true);
+  await pending;
+  assert.ok(clinician.shared.has(SHARED), 'a live consent was not restored');
+  assert.equal(sink.length, 0);
 });
 
-test('the payload may carry a recipient on a revocation, and nothing else new', () => {
+test('R-063: a failed lookup fails closed: the recipient is told and dropped', async () => {
+  const sink: ChangeNotification[] = [];
+  const clinician = recipient('clinician-1', [SHARED], sink);
+
+  await dispatch([clinician], consentEvent(SHARED, 'update', true), async () => {
+    throw new Error('connection reset');
+  });
+
+  assert.equal(sink.length, 1);
+  assert.ok(!clinician.shared.has(SHARED));
+});
+
+test('R-063: a dead socket found while settling a revocation is reported', async () => {
+  const gone = subscriber({ shared: [SHARED], alive: false });
+  const dead = await dispatch([gone], consentEvent(SHARED, 'update', true), async () => false);
+  assert.deepEqual(dead, [gone]);
+});
+
+test('R-063: grants and non-revocation changes never trigger a lookup', async () => {
+  let asked = 0;
+  const holds = async () => {
+    asked += 1;
+    return true;
+  };
+  const clinician = recipient('clinician-1', [SHARED]);
+  await dispatch([clinician], consentEvent(SHARED, 'insert', false), holds);
+  await dispatch([clinician], event({ enrolmentId: SHARED }), holds);
+  assert.equal(asked, 0);
+  assert.ok(clinician.shared.has(SHARED));
+});
+
+test('R-063: the payload has no recipient field; one sent by an old trigger is dropped on parse', () => {
   const parsed = changeNotification.parse({
     ...consentEvent(SHARED, 'update', true),
-    recipientId: 'clinician-1',
+    recipientId: 'someone@example.invalid',
   });
-  assert.equal(parsed.recipientId, 'clinician-1');
+  assert.equal('recipientId' in parsed, false);
+  assert.ok(!toSseFrame(parsed).includes('example.invalid'), 'a recipient identifier reached a client frame');
   assert.deepEqual(Object.keys(changeNotification.parse(event())).sort(), ['at', 'enrolmentId', 'op', 'table']);
 });
 

@@ -4,7 +4,7 @@ import {
   assertScopedTo,
   recordingTransaction,
 } from '../../../packages/core/test/support/recording-tx.ts';
-import { resolveAllowlist } from '../src/allowlist.ts';
+import { holdsLiveConsent, resolveAllowlist } from '../src/allowlist.ts';
 
 /**
  * R-032 / R-033: who a stream may mention is decided here, once, when it opens.
@@ -76,5 +76,26 @@ test('an upper-case account id is normalised before it is compared as text', asy
 test('an account id that is not a uuid is refused before any statement runs', async () => {
   const tx = recordingTransaction([]);
   await assert.rejects(resolveAllowlist(tx, 'not-a-uuid'), /not a uuid/);
+  assert.equal(tx.statements.length, 0);
+});
+
+test('R-063: the revocation lookup names the account and the enrolment, and only live consents count', async () => {
+  const none = recordingTransaction([]);
+  assert.equal(await holdsLiveConsent(none, ACCOUNT.toUpperCase(), SHARED), false);
+
+  const [statement] = none.statements;
+  assert.ok(statement);
+  assert.match(statement.sql, /FROM programme\.sharing_consent/);
+  assert.match(statement.sql, /revoked_at IS NULL/);
+  assertScopedTo(statement, 'recipient_id', ACCOUNT);
+  assert.deepEqual(statement.params, [SHARED, ACCOUNT]);
+
+  const one = recordingTransaction([{ '?column?': 1 }]);
+  assert.equal(await holdsLiveConsent(one, ACCOUNT, SHARED), true);
+});
+
+test('R-063: the revocation lookup refuses an account id that is not a uuid before any statement runs', async () => {
+  const tx = recordingTransaction([]);
+  await assert.rejects(holdsLiveConsent(tx, 'someone@example.invalid', SHARED), /not a uuid/);
   assert.equal(tx.statements.length, 0);
 });

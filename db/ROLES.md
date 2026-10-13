@@ -292,8 +292,11 @@ the open question; counsel should say whether "ask us" is met by this.
   limit each role *within* its tables. A compromised service is bounded; it is
   not blind.
 * **Any login role can `LISTEN tether_change`.** Payloads are an enrolment id, a
-  table and a verb, never a row, and `realtime-service` is the only one that does
-  it. PostgreSQL has no per-role channel ACL.
+  table, a verb, a time and (for a consent) a revoked flag: never a row, and
+  never a recipient identifier (R-063; a revocation does not say whose consent
+  it was, and `realtime-service` finds out by asking, as that recipient, whether
+  a live consent still names them). `realtime-service` is the only service that
+  listens. PostgreSQL has no per-role channel ACL, so any login role *could*.
 * **`service_role` and the project owner bypass RLS by design** (Supabase). No
   service in this repository may be handed either, and the migrations withdraw
   the `anon` and `authenticated` privileges the hosted defaults can carry on
