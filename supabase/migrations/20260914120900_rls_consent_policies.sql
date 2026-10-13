@@ -198,10 +198,23 @@ CREATE POLICY escalation_recipient_raise ON care.escalation
 -- table (0011), and the free-text columns are reachable through this function
 -- alone, which checks for a live `notes` consent itself.
 --
--- SECURITY DEFINER so that it can read columns the caller may not select. It
--- still runs under the policies where the owner is subject to them, and its own
--- predicate does not depend on that: the caller is `app_account_id()`, and
--- without a live `notes` consent naming them it returns no rows.
+-- Why SECURITY DEFINER and not INVOKER: the function exists to read two columns
+-- (`severity`, `context`) that the caller's own role is deliberately not granted.
+-- Making it SECURITY INVOKER would need `tether_care_team` to hold SELECT on those
+-- columns, and column privileges cannot depend on the consent's scope, so a
+-- `totals_and_adherence` clinician could then select free text straight from the
+-- table. DEFINER is therefore the column-access mechanism and nothing more.
+--
+-- It is NOT the row-access mechanism. Under FORCE row level security the owner is
+-- subject to the policies like anyone else, and since the recipient policies are
+-- `TO tether_care_team` no policy names the owner, so an owner that does not
+-- bypass RLS would see no row and every clinician would get an empty lapse detail
+-- with no error. So, as for `release_device_token` (section 6), the owner is given
+-- two policies of its own, below, that say exactly what the function reads: a
+-- consent row naming the caller under a live `notes` consent, and the lapse rows
+-- of that consent's enrolment. Nothing here depends on the owner being a
+-- superuser or having BYPASSRLS; for an owner that has either, the policies are
+-- inert.
 CREATE OR REPLACE FUNCTION care.lapse_details(p_enrolment_id uuid)
   RETURNS TABLE (occurred_at timestamptz, severity text, context text[])
   LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$
@@ -227,6 +240,37 @@ BEGIN
       EXECUTE format('REVOKE ALL ON FUNCTION care.lapse_details(uuid) FROM %I', api_role);
     END IF;
   END LOOP;
+END
+$$;
+
+-- The owner-named policies the function's reads need (see above). The owner is
+-- read from the catalogue so the policies are right for whichever role ran this
+-- migration. They are narrower than the recipient policies: `notes` scope only,
+-- live only, and only for the caller named by `app_account_id()`. They apply to
+-- no role but the function's owner, so they open nothing to any service login.
+DO $$
+DECLARE
+  fn_owner text;
+BEGIN
+  SELECT pg_get_userbyid(proowner) INTO fn_owner
+    FROM pg_proc WHERE oid = 'care.lapse_details(uuid)'::regprocedure;
+
+  EXECUTE format(
+    'CREATE POLICY sharing_consent_lapse_details ON programme.sharing_consent FOR SELECT TO %I
+       USING (revoked_at IS NULL
+              AND scope = ''notes''
+              AND recipient_id = public.app_account_id()::text)',
+    fn_owner
+  );
+  EXECUTE format(
+    'CREATE POLICY lapse_event_lapse_details ON record.lapse_event FOR SELECT TO %I
+       USING (EXISTS (SELECT 1 FROM programme.sharing_consent c
+                       WHERE c.enrolment_id = lapse_event.enrolment_id
+                         AND c.revoked_at IS NULL
+                         AND c.scope = ''notes''
+                         AND c.recipient_id = public.app_account_id()::text))',
+    fn_owner
+  );
 END
 $$;
 

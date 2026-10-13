@@ -79,6 +79,13 @@ context, only to a live `notes` consent) and `ops.release_device_token(text)` by
 `tether_notification` (moves a push token to the newest account holding the
 device).
 
+`care.lapse_details` is SECURITY DEFINER only to read the two columns its caller is
+not granted; it does not rely on its owner bypassing RLS. The recipient policies
+are `TO tether_care_team`, so the migration gives the function's owner (read from
+the catalogue) two narrow policies of its own, `notes` scope and live consent only
+(`sharing_consent_lapse_details`, `lapse_event_lapse_details`). They name no
+service login, and are inert for an owner that already bypasses RLS.
+
 Also: a table's own policies may reference columns the caller cannot select, but
 the tables a policy's **subquery** reads need a grant for the caller. That is why
 `tether_care_team` can select `programme.enrolment(id, account_id)` even though a

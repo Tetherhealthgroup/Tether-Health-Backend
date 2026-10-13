@@ -1204,6 +1204,83 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
+  test('B1: care.lapse_details returns the notes recipient\'s rows for an owner that does not bypass RLS, and only theirs', async () => {
+    await seed(pg);
+    const care = pg.databaseFor('care_team');
+    const detail = (clinician: string, enrolment: string) =>
+      care.withPrincipal(clinician, (tx) =>
+        tx.query<{ severity: string }>(`SELECT severity FROM care.lapse_details($1)`, [enrolment]),
+      );
+
+    const [{ owner } = { owner: '' }] = await pg.admin<{ owner: string }>(
+      `SELECT pg_get_userbyid(proowner) AS owner FROM pg_proc WHERE oid = 'care.lapse_details(uuid)'::regprocedure`,
+    );
+    const policies = await pg.admin<{ policyname: string; roles: string[] }>(
+      `SELECT policyname, roles FROM pg_policies
+        WHERE policyname IN ('sharing_consent_lapse_details', 'lapse_event_lapse_details') ORDER BY 1`,
+    );
+    assert.deepEqual(
+      policies.map((p) => [p.policyname, p.roles]),
+      [
+        ['lapse_event_lapse_details', [owner]],
+        ['sharing_consent_lapse_details', [owner]],
+      ],
+      'the lapse-detail policies are not named for the function owner alone',
+    );
+
+    // Whoever ran the migration, as the harness does.
+    assert.equal((await detail(CLIN2, ENR_A)).length, 1);
+
+    // Now an owner that is neither a superuser nor BYPASSRLS, with the policies
+    // pointed at it. The function must still return the notes recipient's rows.
+    await pg.admin(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rls_owner') THEN CREATE ROLE rls_owner NOLOGIN; END IF; END $$`);
+    await pg.admin(`GRANT USAGE ON SCHEMA public, programme, record TO rls_owner`);
+    await pg.admin(`GRANT USAGE, CREATE ON SCHEMA care TO rls_owner`);
+    await pg.admin(`GRANT SELECT ON programme.sharing_consent, record.lapse_event TO rls_owner`);
+    const repoint = async (target: string) => {
+      const role = await pg.admin<{ q: string }>(`SELECT quote_ident($1) AS q`, [target]);
+      const quoted = role[0]?.q ?? '';
+      await pg.admin(`ALTER POLICY sharing_consent_lapse_details ON programme.sharing_consent TO ${quoted}`);
+      await pg.admin(`ALTER POLICY lapse_event_lapse_details ON record.lapse_event TO ${quoted}`);
+    };
+    try {
+      await pg.admin(`ALTER FUNCTION care.lapse_details(uuid) OWNER TO rls_owner`);
+      await repoint('rls_owner');
+      const [privileged] = await pg.admin<{ rolsuper: boolean; rolbypassrls: boolean }>(
+        `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = 'rls_owner'`,
+      );
+      assert.deepEqual(privileged, { rolsuper: false, rolbypassrls: false });
+
+      const rows = await detail(CLIN2, ENR_A);
+      assert.equal(rows.length, 1, 'a non-bypassing owner returned no lapse detail to a notes recipient');
+      assert.equal(rows[0]?.severity, 'synthetic-severity');
+
+      // Still closed to everyone else: a totals-only recipient, a stranger,
+      // another programme, no principal at all, and a revoked consent.
+      assert.equal((await detail(CLIN, ENR_A)).length, 0, 'a totals-only recipient read lapse detail');
+      assert.equal((await detail(STRANGER, ENR_A)).length, 0, 'a stranger read lapse detail');
+      assert.equal((await detail(CLIN2, ENR_B)).length, 0, 'a notes consent on one programme reached another');
+      assert.equal(
+        (await care.withoutPrincipal((tx) => tx.query(`SELECT 1 FROM care.lapse_details($1)`, [ENR_A]))).length,
+        0,
+        'lapse detail returned with no principal',
+      );
+      await pg.admin(`UPDATE programme.sharing_consent SET revoked_at = now() WHERE id = $1`, [CONSENT_CLIN2_NOTES]);
+      assert.equal((await detail(CLIN2, ENR_A)).length, 0, 'a revoked consent still returned lapse detail');
+      await pg.admin(`UPDATE programme.sharing_consent SET revoked_at = NULL WHERE id = $1`, [CONSENT_CLIN2_NOTES]);
+
+      // The dependency is real: with the policies named for somebody else the same
+      // owner sees nothing, which is the failure this test exists to catch.
+      await repoint(owner);
+      assert.equal((await detail(CLIN2, ENR_A)).length, 0, 'the policies are not what makes it work');
+    } finally {
+      await pg.admin(`ALTER FUNCTION care.lapse_details(uuid) OWNER TO ${owner}`);
+      await repoint(owner);
+      await pg.admin(`DROP OWNED BY rls_owner`);
+      await pg.admin(`DROP ROLE rls_owner`);
+    }
+  });
+
   // -------------------------------------------------------------------------
   // records-service
   // -------------------------------------------------------------------------
