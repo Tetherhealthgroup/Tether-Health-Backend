@@ -105,12 +105,45 @@ few of its statements never name that table.
   The account checks rest on `app.account_id`, which is a convention (see below);
   the action prefixes do not. Together they stop a bug or a confused service
   forging another's rows, not a hostile one impersonating an account.
-* **A service refuses to report ready on a privileged role.** `db.ping()` (so every
-  `/readyz`) also checks that `current_user` is neither `SUPERUSER` nor
-  `BYPASSRLS`, logs at fatal and reports not-ready otherwise. The one escape,
-  for a laptop before the roles exist, is
-  `TETHER_ALLOW_PRIVILEGED_DB_ROLE=local-development-only`; it is ignored when
-  `NODE_ENV=production` and logged at error on every check.
+* **A service refuses to start, and to report ready, on a privileged role.** Two
+  layers, both from the same guard in `packages/core/src/db.ts`:
+  * *Startup* (`requireUnprivilegedRole`, `packages/core/src/startup.ts`). Every
+    service that holds a database connection reads `current_user`'s `rolsuper` and
+    `rolbypassrls` from `pg_roles` before it binds its HTTP listener. A superuser or
+    BYPASSRLS role logs one fatal line naming the attribute and the role name (never
+    the DSN, host or password; driver errors are dropped, not wrapped) and the
+    entrypoint rejects, so the process exits non-zero and never listens.
+  * *Readiness*. `db.ping()` (so every `/readyz`) repeats the check, unchanged.
+
+  Coverage. Checked at boot: auth, care-team, catalogue, chronic, enrolment,
+  notification, records, website, and realtime (where the check runs before the
+  dedicated connection is opened and before `LISTEN tether_change`; see
+  `services/realtime-service/src/startup.ts`). Exempt: `api-gateway`, which has no
+  `createDatabase` call and holds no data. A test
+  (`packages/core/test/startup.test.ts`) fails if a service opens a database
+  without the call, or if realtime issues `LISTEN` outside `startRealtime`.
+
+  **If the role cannot be read at boot** (database unreachable, catalogue query
+  fails) the check is retried 3 times, 1 s then 2 s apart, and then the service
+  refuses to start with "the database role could not be verified". This is
+  stricter than "continue and leave it to readiness" on purpose: Render routes by
+  `/healthz`, not `/readyz`, so a service that started unverified would serve a
+  privileged DSN the moment the database came back. The cost is a restart loop
+  while the database is down at deploy, which is the platform's normal behaviour
+  for a service that cannot start. Nothing could have been served from it anyway.
+
+  **Probes.** `/healthz` is liveness: the process is up and the event loop answers;
+  it touches no dependency. `/readyz` is readiness: the database answers, the role
+  is not privileged, and (realtime) the change-notification listener is connected.
+  `render.yaml` health-checks `/healthz` for all ten services and is unchanged. That
+  is now safe for this risk because a privileged DSN never reaches a listening
+  state, so there is nothing for `/healthz` to wrongly pass.
+
+  **The one escape**, which already existed, is unchanged and applies to both
+  layers: `TETHER_ALLOW_PRIVILEGED_DB_ROLE=local-development-only`, for a laptop
+  before the roles exist. It is off by default, ignored (startup still refused)
+  when `NODE_ENV=production`, and logged at error on every use. No new variable was
+  added for the startup check.
 * **`ops.release_device_token`** needs a principal (it does nothing when
   `app.account_id` is unset) and does not depend on its owner bypassing RLS: the
   migration gives whichever role owns the function one narrow policy on

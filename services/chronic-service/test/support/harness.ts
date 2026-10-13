@@ -143,6 +143,7 @@ export async function startHarness(
     },
     withoutPrincipal: () => Promise.reject(new Error('chronic-service never opens a principal-less transaction')),
     ping: () => Promise.resolve(true),
+    verifyRole: () => Promise.resolve({ status: 'ok' as const }),
     close: () => Promise.resolve(),
   };
 

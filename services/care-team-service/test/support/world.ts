@@ -203,6 +203,7 @@ export function memoryDatabase(world: World): Database {
     withPrincipal: (_accountId, fn) => fn(tx),
     withoutPrincipal: (fn) => fn(tx),
     ping: async () => true,
+    verifyRole: () => Promise.resolve({ status: 'ok' as const }),
     close: async () => {},
   };
 }

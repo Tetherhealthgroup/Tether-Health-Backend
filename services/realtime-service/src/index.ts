@@ -14,6 +14,7 @@ import {
   setProblemBase,
   start,
 } from '@tether/core';
+import { startRealtime } from './startup.ts';
 import { holdsLiveConsent, resolveAllowlist } from './allowlist.ts';
 import {
   dispatch,
@@ -91,7 +92,7 @@ const listener = new Client({
 
 let listenerHealthy = false;
 
-async function startListening(): Promise<void> {
+function attachListenerHandlers(): void {
   listener.on('notification', (message) => {
     if (message.channel !== 'tether_change' || !message.payload) return;
 
@@ -124,11 +125,6 @@ async function startListening(): Promise<void> {
     // Readiness goes false, so the orchestrator takes this instance out of
     // rotation rather than leaving it accepting streams it can never feed.
   });
-
-  await listener.connect();
-  await listener.query('LISTEN tether_change');
-  listenerHealthy = true;
-  logger.info('listening for change notifications');
 }
 
 const app = createApp({ config, logger, verifier });
@@ -200,19 +196,32 @@ finalise(app, {
   isReady: async () => listenerHealthy && (await db.ping()),
 });
 
-await startListening();
+attachListenerHandlers();
 
-start({
-  app,
-  port: config.PORT,
-  serviceName: config.SERVICE_NAME,
+/**
+ * Role check, then LISTEN, then the HTTP listener, in that order (see
+ * `startRealtime`). A superuser or BYPASSRLS role rejects here, before either.
+ */
+await startRealtime({
+  db,
   logger,
-  onShutdown: async () => {
-    // Close the streams before the pool: a subscriber mid-write against a
-    // closed pool would throw on the way out of the process.
-    for (const subscriber of subscribers) subscriber.send.length;
-    subscribers.clear();
-    await listener.end().catch(() => undefined);
-    await db.close();
+  serviceName: config.SERVICE_NAME,
+  listener,
+  serve: () => {
+    listenerHealthy = true;
+    start({
+      app,
+      port: config.PORT,
+      serviceName: config.SERVICE_NAME,
+      logger,
+      onShutdown: async () => {
+        // Close the streams before the pool: a subscriber mid-write against a
+        // closed pool would throw on the way out of the process.
+        for (const subscriber of subscribers) subscriber.send.length;
+        subscribers.clear();
+        await listener.end().catch(() => undefined);
+        await db.close();
+      },
+    });
   },
 });

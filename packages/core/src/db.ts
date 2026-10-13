@@ -80,7 +80,17 @@ export function privilegedRoleProblem(role: RoleAttributes | undefined): string 
 export const PRIVILEGED_ROLE_OVERRIDE = 'TETHER_ALLOW_PRIVILEGED_DB_ROLE';
 export const PRIVILEGED_ROLE_OVERRIDE_VALUE = 'local-development-only';
 
+/** What the catalogue said about the connected role, for startup and readiness. */
+export type RoleVerdict =
+  | { readonly status: 'ok' }
+  /** The role is exempt from RLS. `overridden` is the local-development escape. */
+  | { readonly status: 'privileged'; readonly problem: string; readonly overridden: boolean }
+  /** The catalogue could not be read, so nothing is known about the role. */
+  | { readonly status: 'unreadable' };
+
 export interface RoleGuard {
+  /** What is known about the role right now. Never throws. */
+  evaluate(): Promise<RoleVerdict>;
   /** Resolves true when the connection may serve requests. Never throws. */
   check(): Promise<boolean>;
 }
@@ -95,32 +105,45 @@ export function createRoleGuard(options: {
     options.override === PRIVILEGED_ROLE_OVERRIDE_VALUE && options.environment !== 'production';
   let approved = false;
 
-  return {
-    async check() {
-      if (approved) return true;
+  async function evaluate(): Promise<RoleVerdict> {
+    if (approved) return { status: 'ok' };
 
-      let problem: string | null;
-      try {
-        problem = privilegedRoleProblem(await options.readRole());
-      } catch {
-        // Cannot read it: do not guess. Not ready, and the next probe tries again.
-        return false;
-      }
-      if (problem === null) {
-        // Roles do not gain attributes on a live connection pool without a
-        // reconnect, and the probe runs on every readiness request.
-        approved = true;
-        return true;
-      }
-      if (overridden) {
+    let problem: string | null;
+    try {
+      problem = privilegedRoleProblem(await options.readRole());
+    } catch {
+      // Cannot read it: do not guess. The error is dropped on purpose; a driver
+      // error can carry the connection string.
+      return { status: 'unreadable' };
+    }
+    if (problem === null) {
+      // Roles do not gain attributes on a live connection pool without a
+      // reconnect, and the probe runs on every readiness request.
+      approved = true;
+      return { status: 'ok' };
+    }
+    return { status: 'privileged', problem, overridden };
+  }
+
+  return {
+    evaluate,
+    async check() {
+      const verdict = await evaluate();
+      if (verdict.status === 'ok') return true;
+      // Not ready, and the next probe tries again.
+      if (verdict.status === 'unreadable') return false;
+      if (verdict.overridden) {
         options.logger.error(
           { override: PRIVILEGED_ROLE_OVERRIDE },
-          `${problem}. Serving anyway because ${PRIVILEGED_ROLE_OVERRIDE} is set. ` +
+          `${verdict.problem}. Serving anyway because ${PRIVILEGED_ROLE_OVERRIDE} is set. ` +
             'This must never be set outside local development.',
         );
         return true;
       }
-      options.logger.fatal({ check: 'database role' }, `${problem}. Refusing to report ready.`);
+      options.logger.fatal(
+        { check: 'database role' },
+        `${verdict.problem}. Refusing to report ready.`,
+      );
       return false;
     },
   };
@@ -161,6 +184,12 @@ export interface Database {
    * Used by readiness, not liveness.
    */
   ping(): Promise<boolean>;
+
+  /**
+   * What the connected role is, for the startup check in `requireUnprivilegedRole`.
+   * Never throws and never carries a driver error.
+   */
+  verifyRole(): Promise<RoleVerdict>;
 
   close(): Promise<void>;
 }
@@ -264,6 +293,8 @@ export function createDatabase(options: DatabaseOptions): Database {
         return false;
       }
     },
+
+    verifyRole: () => roleGuard.evaluate(),
 
     close: () => pool.end(),
   };

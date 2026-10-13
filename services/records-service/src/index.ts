@@ -5,6 +5,7 @@ import {
   loadConfig,
   setProblemBase,
   start,
+  requireUnprivilegedRole,
 } from '@tether/core';
 import { createRecordsApp } from './app.ts';
 import { createPostgresStore } from './postgres-store.ts';
@@ -41,6 +42,12 @@ const db = createDatabase({
   applicationName: config.SERVICE_NAME,
   logger,
 });
+
+/**
+ * Before anything else is built, and long before `start` binds the listener: a
+ * privileged role must never reach a listening state. See `requireUnprivilegedRole`.
+ */
+await requireUnprivilegedRole(db, { logger, serviceName: config.SERVICE_NAME });
 
 const app = createRecordsApp({
   config,

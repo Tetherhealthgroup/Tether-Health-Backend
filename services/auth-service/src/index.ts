@@ -7,6 +7,7 @@ import {
   loadConfig,
   setProblemBase,
   start,
+  requireUnprivilegedRole,
 } from '@tether/core';
 import { authSchema } from './config.ts';
 import { createAuthRouter } from './routes.ts';
@@ -45,6 +46,12 @@ const db = createDatabase({
   applicationName: config.SERVICE_NAME,
   logger,
 });
+
+/**
+ * Before anything else is built, and long before `start` binds the listener: a
+ * privileged role must never reach a listening state. See `requireUnprivilegedRole`.
+ */
+await requireUnprivilegedRole(db, { logger, serviceName: config.SERVICE_NAME });
 
 /**
  * Signs Tether access tokens. Awaited at boot so a malformed key stops the

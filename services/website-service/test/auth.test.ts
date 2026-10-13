@@ -67,6 +67,7 @@ async function start(): Promise<Running> {
     },
     withPrincipal: () => Promise.reject(new Error('website-service never scopes to an account')),
     ping: () => Promise.resolve(true),
+    verifyRole: () => Promise.resolve({ status: 'ok' as const }),
     close: () => Promise.resolve(),
   };
 
