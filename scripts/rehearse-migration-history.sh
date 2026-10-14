@@ -12,11 +12,29 @@
 #                    live project holds was dropped, renamed or rewritten.
 #   probe-ordering   Plan section 3. Put Backend's 12 migrations at their
 #                    CURRENT (older) versions next to the applied 9 and record,
-#                    verbatim, what the local CLI does. Observation only.
+#                    verbatim, what the local CLI does. Observation only. Only
+#                    meaningful before the implementing ticket (S1) renames them.
+#   print-catalogue-sql
+#                    Plan section 5, step S3. Prints, and connects to nothing,
+#                    the read-only catalogue query (no row data) that the owner
+#                    pastes into the hosted SQL editor before and after S6.
 #
-# Needs: bash, git, psql, docker, the supabase CLI. None of them is run by the
-# agent that wrote this file (no Docker on that machine): the run is an owner
-# check, see plan section 11.
+# Layouts. Backend's migration directory is read in either of two layouts:
+#   pre-S1   Backend's 12 files at 20260914... (today). They are re-versioned in
+#            the temporary project only; nothing in the repository is renamed.
+#   post-S1  The 9 adopted Tether-Health files (12-digit versions) plus the 12
+#            Backend files already at their new 14-digit versions. Nothing is
+#            re-versioned; the adopted files are checked against the plan's
+#            section 2.1 hashes and are not copied from the repository.
+# PASS means the same in both: every assertion below holds. Before P-1 (plan
+# section 4.2) one FAIL, def.set_updated_at(), is the expected result.
+#
+# Needs: bash, git, psql, docker (a RUNNING daemon), the supabase CLI. None of
+# them has been run by the agent that wrote this file (no Docker daemon, no
+# psql on that machine): the run is an owner check, see plan section 7 (OC-3).
+#
+# Output. CLI output is passed through a redactor (JWTs, sb_ keys, URLs). Do not
+# paste the output of `supabase status` or `supabase start` anywhere.
 #
 # Environment:
 #   PGPASSWORD            required. The password of the LOCAL stack's postgres
@@ -56,9 +74,158 @@ USER_C=00000000-0000-4000-8000-0000000000c3
 ENROLMENT_A=00000000-0000-4000-8000-0000000000e1
 ENROLMENT_B=00000000-0000-4000-8000-0000000000e2
 
-# 3 Tether-Health tables + 19 Backend tables (plan section 6.5). A different
+# 3 Tether-Health tables + 19 Backend tables (plan section 6.6). A different
 # count means a table was added or removed: re-read the plan before trusting it.
 EXPECTED_FORCED_TABLES=22
+
+# Plan section 2.1: sha256 of each adopted Tether-Health file, by file name.
+tether_expected_sha() {
+  case "$1" in
+    202609110001_profiles.sql) printf '%s' dabd83f95b7c4e2f951d1aeb4375cccbec72d67012c653708224492936c2439b ;;
+    202609150001_quit_plans.sql) printf '%s' 641cfc47492832f8650616fb3dbbf30b2cd79eb2c54aa8a84743b9549fc3005a ;;
+    202609150002_quit_plan_validator_grant.sql) printf '%s' edb340f1764cde4dd2b064b0b44e3f8034ce1027ec06b9963d1708d72ee0807b ;;
+    202609150003_quit_plan_upsert_grant.sql) printf '%s' 7ae8f7d97cf480fd3956a4f81a62d0376e219029eac07f49486c455ef0d4c2d4 ;;
+    202609150004_quit_plan_integrity.sql) printf '%s' 399060bca03aa3ec1f3064c322b547a6c28bb6d0ec3f95e1c01c003e61a3b2ef ;;
+    202609150005_quit_plan_contract_hardening.sql) printf '%s' 6aacf5b684623d38bf8c0efa81b29220b698ffd179befaf89f301d3c3072708a ;;
+    202609200001_account_data_deletion.sql) printf '%s' 6490ab749a25e60fed1f7091557a8753234a892b130e5b5f68e13b314cf295bf ;;
+    202609260001_program_data.sql) printf '%s' 6b011ad26db77e5d32cf495a8b7191802c7cec12720e0c1d734c19f294bc1cd9 ;;
+    202610030001_avatar_deletion_barrier.sql) printf '%s' 18014a8af83712618db7f165e0056657e7fd4216195e136fffafdc34a8fe1db9 ;;
+    *) printf '%s' unknown ;;
+  esac
+}
+
+# Plan section 2.2: sha256 of each Backend file at 79685b2, by name without the
+# version. A different hash means the plan describes other content: re-read its
+# section 11 (B1, R-063) and 4.2 (P-1) before trusting a PASS.
+backend_expected_sha() {
+  case "$1" in
+    foundation) printf '%s' 4e5a06dacae82e2bc7a3134d8fe536f9a2b1ad0828495802b0312050d565d8eb ;;
+    catalogue) printf '%s' a808949ed049022bb5270502380baa0184820be25220c6414c42ae20d799a380 ;;
+    programme_and_record) printf '%s' 358865c3e46c39dd4618858add6705783a563ad199e335053e3b50663d23ae68 ;;
+    auth_sessions) printf '%s' 2ad54308561a0c732392d4a984d901fc1f7b8e62c0dbe5fc4b19495972f81e72 ;;
+    care) printf '%s' 0e746c6823697b1ea5bef6aecdea8845fdf0933e0402361ac378eac4d0051a62 ;;
+    notifications) printf '%s' 8e5de43ee0dfc7671880ddf530930c695fd53f3d776ef2543df6abe3b909b240 ;;
+    chronic) printf '%s' 61f89fe5fbe9efe32123f88d055c8e2b57a5e48f20e315e02d212fd7fbd0fae6 ;;
+    realtime) printf '%s' a848b11e1a95eec8ef34fc559d0c450eb9e267c0906654069395d8e63f0807a9 ;;
+    service_roles) printf '%s' 3e0456419be80158403497474d27e1d61ad0aa2a507568b3103cb56479db5724 ;;
+    rls_consent_policies) printf '%s' 2a9a757df853a2f000aa9ce59588a1fac68d1df4b109251ce1814758d4b2b82b ;;
+    service_grants) printf '%s' 96e9778f66a7a0abe9d471cf19e0ee8176c2791e5a5c6e1d910ea459bfa8dbd5 ;;
+    consent_revocation_recipient) printf '%s' 43583f6b2b9d721dda653f4e6f8a254a6112af598d3d9292fa72f3669615107f ;;
+    *) printf '%s' unknown ;;
+  esac
+}
+
+file_sha256() {
+  if command -v sha256sum > /dev/null; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# The catalogue-only snapshot: one read-only SELECT, no row data from any table
+# (no rows.* and no count.* keys), one text line per key. The rehearsal compares
+# it before and after the Backend chain. The owner may also paste it into the
+# hosted SQL editor before and after S6 (`print-catalogue-sql`), because the
+# editor shows only the last statement's result, so it is a single query.
+catalogue_sql() {
+  cat << 'SQL'
+select line from (
+  select 'bucket.avatars|' || id || ',' || public || ',' || coalesce(file_size_limit::text, '') || ',' || coalesce(allowed_mime_types::text, '') as line
+    from storage.buckets where id = 'avatars'
+  union all
+  select 'force.' || c.relname || '|' || c.relrowsecurity || ',' || c.relforcerowsecurity
+    from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relname in ('profiles', 'quit_plans', 'program_data')
+  union all
+  select 'def.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || md5(pg_get_functiondef(p.oid))
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('delete_my_app_data', 'begin_account_deletion', 'avatar_write_allowed',
+                       'save_program_data', 'set_updated_at', 'handle_new_auth_user',
+                       'is_valid_support_people', 'is_unique_text_array')
+  union all
+  select 'acl.function.' || p.proname || '|' || coalesce(p.proacl::text, '')
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and p.proname in ('delete_my_app_data', 'begin_account_deletion', 'avatar_write_allowed',
+                       'save_program_data', 'set_updated_at', 'handle_new_auth_user',
+                       'is_valid_support_people', 'is_unique_text_array')
+  union all
+  select 'policies.public|' || coalesce(md5(string_agg(format('%s|%s|%s|%s|%s|%s', tablename, policyname, cmd, roles, qual, with_check), E'\n' order by tablename, policyname)), '')
+    from pg_policies where schemaname = 'public' and tablename in ('profiles', 'quit_plans', 'program_data')
+  union all
+  select 'policies.public.count|' || count(*)
+    from pg_policies where schemaname = 'public' and tablename in ('profiles', 'quit_plans', 'program_data')
+  union all
+  select 'policies.avatars|' || coalesce(md5(string_agg(format('%s|%s|%s|%s|%s', policyname, cmd, roles, qual, with_check), E'\n' order by policyname)), '')
+    from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'avatars\_%'
+  union all
+  select 'policies.avatars.count|' || count(*)
+    from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'avatars\_%'
+  union all
+  select 'triggers.auth_users|' || coalesce(md5(string_agg(pg_get_triggerdef(oid), E'\n' order by tgname)), '')
+    from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal
+  union all
+  select 'trigger.name.' || tgname || '|present'
+    from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal
+  union all
+  select 'triggers.public_tables|' || coalesce(md5(string_agg(pg_get_triggerdef(t.oid), E'\n' order by t.tgname)), '')
+    from pg_trigger t
+   where t.tgrelid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
+     and not t.tgisinternal
+  union all
+  select 'columns.' || c.relname || '|' || md5(string_agg(format('%s|%s|%s|%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '')), E'\n' order by a.attnum))
+    from pg_class c
+    join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+    left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+   where c.oid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
+   group by c.relname
+  union all
+  select 'constraints.' || conrelid::regclass::text || '|' || md5(string_agg(conname || ':' || pg_get_constraintdef(oid), E'\n' order by conname))
+    from pg_constraint
+   where conrelid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
+   group by conrelid
+  union all
+  select 'acl.table.' || c.relname || '|' || coalesce(c.relacl::text, '')
+    from pg_class c where c.oid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
+  union all
+  select 'acl.columns.' || c.relname || '|' || coalesce(md5(string_agg(a.attname || ':' || a.attacl::text, E'\n' order by a.attname)), '')
+    from pg_class c join pg_attribute a on a.attrelid = c.oid and a.attacl is not null
+   where c.oid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
+   group by c.relname
+  union all
+  select 'ledger.statements.' || version || '|' || md5(array_to_string(statements, E'\n'))
+    from supabase_migrations.schema_migrations
+   where version in ('202609110001', '202609150001', '202609150002', '202609150003', '202609150004',
+                     '202609150005', '202609200001', '202609260001', '202610030001')
+) q
+order by line;
+SQL
+}
+
+# Row-level keys: counts and row hashes of the three tables. Synthetic data only,
+# local only. Never printed for the hosted project.
+row_sql() {
+  cat << 'SQL'
+select 'count.auth_users|' || count(*) from auth.users
+union all select 'count.profiles|' || count(*) from public.profiles
+union all select 'count.quit_plans|' || count(*) from public.quit_plans
+union all select 'count.program_data|' || count(*) from public.program_data
+union all select 'count.avatar_objects|' || count(*) from storage.objects where bucket_id = 'avatars'
+union all select 'rows.profiles|' || coalesce(md5(string_agg(p::text, E'\n' order by p.id)), '') from public.profiles p
+union all select 'rows.quit_plans|' || coalesce(md5(string_agg(q::text, E'\n' order by q.user_id)), '') from public.quit_plans q
+union all select 'rows.program_data|' || coalesce(md5(string_agg(d::text, E'\n' order by d.user_id, d.program_id)), '') from public.program_data d;
+SQL
+}
+
+redact() {
+  # Strip anything key-, token- or URL-shaped from CLI output.
+  sed -E \
+    -e 's/eyJ[A-Za-z0-9._-]+/[redacted-jwt]/g' \
+    -e 's/sb_[a-z]+_[A-Za-z0-9_-]+/[redacted-key]/g' \
+    -e 's#[A-Za-z][A-Za-z0-9+.-]*://[^[:space:]]+#[redacted-url]#g'
+}
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="${PGHOST:-127.0.0.1}"
@@ -78,8 +245,13 @@ refuse() {
 }
 
 case "$MODE" in
+  print-catalogue-sql)
+    # Connects to nothing, needs no tool and no environment.
+    catalogue_sql
+    exit 0
+    ;;
   rehearse | probe-ordering) ;;
-  *) refuse "usage: $0 rehearse | probe-ordering" ;;
+  *) refuse "usage: $0 rehearse | probe-ordering | print-catalogue-sql" ;;
 esac
 
 case "$HOST" in
@@ -201,6 +373,12 @@ as_service() {
   } | psql_local
 }
 
+cli() {
+  # Run the supabase CLI against the temporary project, output redacted. The
+  # pipeline keeps the CLI's own exit status (pipefail).
+  supabase "$@" --workdir "$WORKDIR" 2>&1 | redact
+}
+
 new_version() {
   # 20260914120000 -> <VERSION_DATE>120000: same time-of-day, so order is kept.
   printf '%s%s' "$VERSION_DATE" "${1:8}"
@@ -247,10 +425,14 @@ TOML
 }
 
 copy_tether_migrations() {
-  local path name count=0 expected="" version
+  local path name count=0 expected="" version actual
   while IFS= read -r path; do
     name="${path##*/}"
     git -C "$TETHER_HEALTH_REPO" show "origin/develop:$path" > "$WORKDIR/supabase/migrations/$name"
+    # Pinned by content (plan section 2.1), not by branch name: a moved
+    # origin/develop that changes any of the 9 is refused.
+    actual="$(file_sha256 "$WORKDIR/supabase/migrations/$name")"
+    [ "$actual" = "$(tether_expected_sha "$name")" ] || refuse "$name differs from the plan's section 2.1 sha256"
     version="${name%%_*}"
     expected="$expected $version"
     count=$((count + 1))
@@ -258,31 +440,76 @@ copy_tether_migrations() {
   expected="${expected# }"
   [ "$count" -eq 9 ] || refuse "expected 9 Tether-Health migrations on origin/develop, found $count"
   [ "$expected" = "$EXPECTED_TETHER_VERSIONS" ] || refuse "Tether-Health versions differ from the plan: $expected"
-  say "Tether-Health origin/develop at $(git -C "$TETHER_HEALTH_REPO" rev-parse origin/develop): 9 migrations copied"
+  say "Tether-Health origin/develop at $(git -C "$TETHER_HEALTH_REPO" rev-parse origin/develop): 9 migrations copied, all match plan section 2.1"
 }
 
 copy_backend_migrations() {
   # copy_backend_migrations renamed|original
-  local style="$1" file name version target count=0
+  local style="$1" file name version rest key target actual expected
+  local count=0 adopted=0 already=0 pre=0
+  say "Backend HEAD: $(git -C "$ROOT" rev-parse HEAD)"
+  if [ -n "$(git -C "$ROOT" status --porcelain -- supabase/migrations)" ]; then
+    say "WARNING: uncommitted changes under supabase/migrations; the run describes the working tree, not HEAD"
+  fi
   for file in "$ROOT"/supabase/migrations/*.sql; do
     name="${file##*/}"
     version="${name%%_*}"
-    if [ "$style" = "renamed" ]; then
-      target="$(new_version "$version")_${name#*_}"
-      # Must sort after the newest applied version as a string AND as a number,
-      # because which comparison the CLI uses is Unknown (plan section 3).
-      # A string comparison on purpose (SC2071): that is the comparison in question.
-      # shellcheck disable=SC2071
-      [[ "${target%%_*}" > "$NEWEST_TETHER_VERSION" ]] || refuse "re-versioned $target does not sort after $NEWEST_TETHER_VERSION as a string"
-      [ "${target%%_*}" -gt "$NEWEST_TETHER_VERSION" ] || refuse "re-versioned $target is not greater than $NEWEST_TETHER_VERSION as a number"
-    else
+    rest="${name#*_}"
+    key="${rest%.sql}"
+    case "${#version}" in
+      12)
+        # post-S1: an adopted Tether-Health file. Already placed from git by
+        # copy_tether_migrations; here it only has to be byte-identical.
+        actual="$(file_sha256 "$file")"
+        [ "$actual" = "$(tether_expected_sha "$name")" ] || refuse "adopted file $name differs from the plan's section 2.1 sha256"
+        adopted=$((adopted + 1))
+        continue
+        ;;
+      14) ;;
+      *) refuse "$name: a version must be 12 digits (adopted) or 14 digits (Backend)" ;;
+    esac
+
+    actual="$(file_sha256 "$file")"
+    expected="$(backend_expected_sha "$key")"
+    if [ "$actual" != "$expected" ]; then
+      if [ "${ACCEPT_BACKEND_HASH_DRIFT:-0}" = "1" ]; then
+        say "NOTE: $name differs from plan section 2.2 (accepted by ACCEPT_BACKEND_HASH_DRIFT=1); re-read plan sections 4.2 and 11"
+      else
+        refuse "$name differs from the plan's section 2.2 sha256; set ACCEPT_BACKEND_HASH_DRIFT=1 only after re-reading plan sections 4.2 and 11"
+      fi
+    fi
+
+    # Is this 14-digit version already past the newest adopted one (post-S1), or
+    # is it still a 20260914... version (pre-S1)? Both are compared the two ways
+    # the CLI might compare them, because which one it uses is Unknown.
+    # shellcheck disable=SC2071
+    if [[ "$version" > "$NEWEST_TETHER_VERSION" ]] && [ "$version" -gt "$NEWEST_TETHER_VERSION" ]; then
+      already=$((already + 1))
       target="$name"
+    else
+      pre=$((pre + 1))
+      if [ "$style" = "renamed" ]; then
+        target="$(new_version "$version")_${rest}"
+        # shellcheck disable=SC2071
+        [[ "${target%%_*}" > "$NEWEST_TETHER_VERSION" ]] || refuse "re-versioned $target does not sort after $NEWEST_TETHER_VERSION as a string"
+        [ "${target%%_*}" -gt "$NEWEST_TETHER_VERSION" ] || refuse "re-versioned $target is not greater than $NEWEST_TETHER_VERSION as a number"
+      else
+        target="$name"
+      fi
     fi
     cp "$file" "$WORKDIR/supabase/migrations/$target"
     count=$((count + 1))
   done
   [ "$count" -eq 12 ] || refuse "expected 12 Backend migrations in $ROOT/supabase/migrations, found $count"
-  say "Backend migrations copied as '$style': $count files"
+  [ "$pre" -eq 0 ] || [ "$already" -eq 0 ] || refuse "mixed layout: some Backend files are re-versioned and some are not"
+  [ "$adopted" -eq 0 ] || [ "$adopted" -eq 9 ] || refuse "found $adopted adopted Tether-Health files, expected 0 or 9"
+  if [ "$already" -gt 0 ]; then
+    [ "$adopted" -eq 9 ] || refuse "post-S1 layout without the 9 adopted files"
+    [ "$style" = "renamed" ] || refuse "probe-ordering needs the pre-S1 layout (files at their old versions); this directory is post-S1"
+    say "Layout: post-S1 ($adopted adopted files verified, $already Backend files already re-versioned, nothing renamed)"
+  else
+    say "Layout: pre-S1 ($pre Backend files, copied as '$style')"
+  fi
 }
 
 start_stack() {
@@ -291,7 +518,14 @@ start_stack() {
   write_config
   copy_tether_migrations
   say "Starting the disposable stack (project_id $LOCAL_PROJECT_ID, db port $LOCAL_DB_PORT)"
-  supabase start --workdir "$WORKDIR"
+  # `supabase start` prints local API keys and URLs. Its output goes to a file in
+  # the temporary directory (deleted at exit); only redacted error lines are shown.
+  if ! supabase start --workdir "$WORKDIR" > "$WORKDIR/start.log" 2>&1; then
+    say "supabase start failed. Redacted error lines:"
+    grep -i -E 'error|fail|denied|refused|port' "$WORKDIR/start.log" | tail -n 20 | redact || true
+    exit 1
+  fi
+  say "Stack started (its output was withheld: it contains local keys)"
   # Fresh stack, fresh data: if either differs this is not the stack we made.
   check "stack starts empty (auth.users rows)" "0" "$(psql_local -c 'select count(*) from auth.users')"
   check "ledger holds exactly the 9 Tether-Health versions" "$EXPECTED_TETHER_VERSIONS" \
@@ -352,78 +586,8 @@ SQL
 # ---------------------------------------------------------------------------
 
 snapshot() {
-  psql_local << 'SQL' | LC_ALL=C sort
-select 'count.auth_users|' || count(*) from auth.users;
-select 'count.profiles|' || count(*) from public.profiles;
-select 'count.quit_plans|' || count(*) from public.quit_plans;
-select 'count.program_data|' || count(*) from public.program_data;
-select 'count.avatar_objects|' || count(*) from storage.objects where bucket_id = 'avatars';
-select 'rows.profiles|' || coalesce(md5(string_agg(p::text, E'\n' order by p.id)), '') from public.profiles p;
-select 'rows.quit_plans|' || coalesce(md5(string_agg(q::text, E'\n' order by q.user_id)), '') from public.quit_plans q;
-select 'rows.program_data|' || coalesce(md5(string_agg(d::text, E'\n' order by d.user_id, d.program_id)), '') from public.program_data d;
-
-select 'bucket.avatars|' || id || ',' || public || ',' || coalesce(file_size_limit::text, '') || ',' || coalesce(allowed_mime_types::text, '')
-  from storage.buckets where id = 'avatars';
-
-select 'force.' || c.relname || '|' || c.relrowsecurity || ',' || c.relforcerowsecurity
-  from pg_class c join pg_namespace n on n.oid = c.relnamespace
- where n.nspname = 'public' and c.relname in ('profiles', 'quit_plans', 'program_data');
-
-select 'def.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|' || md5(pg_get_functiondef(p.oid))
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'public'
-   and p.proname in ('delete_my_app_data', 'begin_account_deletion', 'avatar_write_allowed',
-                     'save_program_data', 'set_updated_at', 'handle_new_auth_user',
-                     'is_valid_support_people', 'is_unique_text_array');
-
-select 'acl.function.' || p.proname || '|' || coalesce(p.proacl::text, '')
-  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'public'
-   and p.proname in ('delete_my_app_data', 'begin_account_deletion', 'avatar_write_allowed',
-                     'save_program_data', 'set_updated_at', 'handle_new_auth_user',
-                     'is_valid_support_people', 'is_unique_text_array');
-
-select 'policies.public|' || md5(string_agg(format('%s|%s|%s|%s|%s|%s', tablename, policyname, cmd, roles, qual, with_check), E'\n' order by tablename, policyname))
-  from pg_policies where schemaname = 'public' and tablename in ('profiles', 'quit_plans', 'program_data');
-select 'policies.public.count|' || count(*)
-  from pg_policies where schemaname = 'public' and tablename in ('profiles', 'quit_plans', 'program_data');
-
-select 'policies.avatars|' || md5(string_agg(format('%s|%s|%s|%s|%s', policyname, cmd, roles, qual, with_check), E'\n' order by policyname))
-  from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'avatars\_%';
-select 'policies.avatars.count|' || count(*)
-  from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname like 'avatars\_%';
-
-select 'triggers.auth_users|' || coalesce(md5(string_agg(pg_get_triggerdef(oid), E'\n' order by tgname)), '')
-  from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal;
-select 'trigger.name.' || tgname || '|present'
-  from pg_trigger where tgrelid = 'auth.users'::regclass and not tgisinternal;
-select 'triggers.public_tables|' || md5(string_agg(pg_get_triggerdef(t.oid), E'\n' order by t.tgname))
-  from pg_trigger t
- where t.tgrelid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
-   and not t.tgisinternal;
-
-select 'columns.' || c.relname || '|' || md5(string_agg(format('%s|%s|%s|%s', a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, coalesce(pg_get_expr(d.adbin, d.adrelid), '')), E'\n' order by a.attnum))
-  from pg_class c
-  join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-  left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
- where c.oid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
- group by c.relname;
-
-select 'constraints.' || conrelid::regclass::text || '|' || md5(string_agg(conname || ':' || pg_get_constraintdef(oid), E'\n' order by conname))
-  from pg_constraint
- where conrelid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
- group by conrelid;
-
-select 'acl.table.' || c.relname || '|' || coalesce(c.relacl::text, '')
-  from pg_class c where c.oid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass);
-select 'acl.columns.' || c.relname || '|' || coalesce(md5(string_agg(a.attname || ':' || a.attacl::text, E'\n' order by a.attname)), '')
-  from pg_class c join pg_attribute a on a.attrelid = c.oid and a.attacl is not null
- where c.oid in ('public.profiles'::regclass, 'public.quit_plans'::regclass, 'public.program_data'::regclass)
- group by c.relname;
-
-select 'ledger.first9|' || string_agg(version, ' ' order by version)
-  from (select version from supabase_migrations.schema_migrations order by version limit 9) v;
-SQL
+  # The catalogue keys and the row keys, one sorted `key|value` line each.
+  { catalogue_sql; row_sql; } | psql_local | LC_ALL=C sort
 }
 
 compare_snapshots() {
@@ -556,12 +720,15 @@ run_rehearse() {
   snapshot > "$before"
   say "snapshot taken: $(wc -l < "$before" | tr -d ' ') keys"
   grep -E '^count\.' "$before"
+  # Plan section 5, S3: the owner compares these ledger hashes with the hosted
+  # project's (the same md5 over the same column).
+  grep -E '^ledger\.statements\.' "$before"
 
   say
-  say "== 3. apply the Backend chain, re-versioned to sort after $NEWEST_TETHER_VERSION =="
+  say "== 3. apply the Backend chain (must sort after $NEWEST_TETHER_VERSION) =="
   copy_backend_migrations renamed
-  supabase migration list --local --workdir "$WORKDIR"
-  supabase migration up --local --workdir "$WORKDIR"
+  cli migration list --local
+  cli migration up --local
   seed_backend
   snapshot > "$after"
 
@@ -605,11 +772,11 @@ run_probe() {
   start_stack
   copy_backend_migrations original
 
-  probe "list" supabase migration list --local --workdir "$WORKDIR"
-  probe "db push dry run" supabase db push --local --dry-run --workdir "$WORKDIR"
-  probe "migration up, no flags" supabase migration up --local --workdir "$WORKDIR"
-  probe "db push, no flags" supabase db push --local --workdir "$WORKDIR"
-  probe "db push --include-all" supabase db push --local --include-all --workdir "$WORKDIR"
+  probe "list" cli migration list --local
+  probe "db push dry run" cli db push --local --dry-run
+  probe "migration up, no flags" cli migration up --local
+  probe "db push, no flags" cli db push --local
+  probe "db push --include-all" cli db push --local --include-all
   say
   say "Record each block above verbatim in plan section 3.2. The GitHub integration cannot be probed here."
 }
