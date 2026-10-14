@@ -6,7 +6,7 @@ other in ways the schema has to reconcile rather than paper over:
 | Front-end | What it is | Talks to a backend today |
 |---|---|---|
 | `www.tetherhealthgroup.com` | Astro static site | No. One waitlist form with no endpoint behind it. |
-| `Tether-Health` | Flutter — BreatheFree + LookUp, eleven health areas | **No, and it structurally cannot.** See "The client constraint". |
+| `Tether-Health` | Flutter — BreatheFree + LookUp, eleven health areas | **Yes, but not this backend.** It calls the NestJS `Tether-Health/api` (`lib/main.dart:80-97`; routes in `api/src/profile/profile.controller.ts:13`) and Supabase directly (`lib/auth/auth_gateway.dart:85`). See "The client today". |
 | `chronic-care` | Flutter — five conditions | A FastAPI service exists but the app never calls it (`API_ONLINE` defaults false). |
 
 ---
@@ -93,26 +93,41 @@ names.
 no `UPDATE`, no `DELETE` outside a full account deletion, and no derived counter
 column anywhere that a lapse decrements.
 
-## The client constraint
+## The client today
 
-`Tether-Health/pubspec.yaml` declares exactly one runtime dependency, and
-`test/no_third_party_sdks_test.dart` asserts it:
+Every citation in this section is to `Tether-Health` at `origin/develop` `7b9dab6`
+(the revision `decisions/OPS-020-endpoint-mapping.md` read), not to this repo.
 
-```dart
-expect(names, ['flutter'],
-  reason: 'the app ships with no runtime package outside the Flutter SDK. '
-          'Adding one is a decision about what leaves a patient device.');
-```
-
-Adding `http` to that app fails its build. Two consequences for this backend:
-
-- **Firebase is server-side only.** `firebase-admin` sends pushes from
-  `notification-service`; the app receives them through the OS. No Firebase SDK
-  ever enters the client. This is not a preference — addendum §3.2 forbids
-  third-party SDKs on child profiles outright.
-- The client's HTTP layer will have to be written against `dart:io` inside the app,
-  or that test consciously amended. Either is a decision for the app's owner, not
-  something this repo can assume.
+- **It has runtime dependencies beyond Flutter, including an HTTP client.**
+  `pubspec.yaml:9-19` declares `flutter`, `flutter_secure_storage`, `flutter_tts`,
+  `http`, `image_picker`, `supabase_flutter` and `url_launcher`. There is no
+  `test/no_third_party_sdks_test.dart` on that revision, so nothing asserts a
+  one-dependency limit.
+- **It already makes HTTP calls, to a different backend.** The four API clients
+  use `package:http` (`lib/profile/profile_api_client.dart:2`,
+  `lib/programs/program_data_api_client.dart:3`,
+  `lib/quit_plan/quit_plan_api_client.dart:3`,
+  `lib/account/account_data_api_client.dart:4`), take their host from
+  `API_BASE_URL` (`lib/config/app_config.dart:10`, `lib/main.dart:80-97`) and send
+  the Supabase access token as a bearer token (for example
+  `lib/profile/profile_api_client.dart:42`). Their paths are `/v1/profile`,
+  `/v1/program-data/...`, `/v1/quit-plan` and `/v1/account/...`
+  (`lib/profile/profile_api_client.dart:41`,
+  `lib/programs/program_data_api_client.dart:42`,
+  `lib/quit_plan/quit_plan_api_client.dart:47,54`,
+  `lib/account/account_data_api_client.dart:101,112`), which are the NestJS routes
+  in `api/src/*/*.controller.ts` (`@Controller("v1/profile")` and the like, e.g.
+  `api/src/profile/profile.controller.ts:13`). No client file contains
+  `/api/v1`, this gateway's prefix (`git grep "api/v1" -- lib` returns nothing).
+- **It talks to Supabase directly for sign-in and avatars.** Sign-in, sign-up and
+  password reset use `supabase_flutter` (`lib/auth/auth_gateway.dart:85,101,132`);
+  avatar upload and removal go to the `avatars` storage bucket
+  (`lib/profile/avatar_storage.dart:26-35`).
+- **Firebase is still server-side only.** `firebase-admin` is declared only by
+  `notification-service` (`services/notification-service/package.json:17`), which
+  says the app receives pushes through the operating system and never links a
+  Firebase SDK (`services/notification-service/src/push.ts:16-17`). The app's
+  `pubspec.yaml:9-19` lists no Firebase package.
 
 ## What is inherited from AmericanGroupLLC-Backend
 
