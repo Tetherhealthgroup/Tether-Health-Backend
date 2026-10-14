@@ -6,7 +6,7 @@
 > - **Approving or using it is Tier 3, and the owner does it.**
 > - **Executing any step in it is Tier 4. Only the owner does that, under their own login.**
 >
-> No agent may run a step below. The only external contact made to write this was one read-only fetch of Render's public pricing page (§6), which the dispatch permitted. No agent has signed in to, queried or changed Render, Supabase or GitHub, and no agent has seen a secret value. Every value shown is a placeholder in `<angle brackets>`. Ticket: OPS-022 (office repo `backlog/OPS-022.md`). Risks: R-032 (superuser DSN / RLS bypass) and R-070 (office-guard and `supabase/` reads).
+> No agent may run a step below. The only external contact made to write this was one read-only fetch of Render's public pricing page (§6). The owner's run dispatch for this draft (2026-10-14) allowed that fetch as its only exception to "never contact a hosted service". The ticket's own dispatch prompt (OPS-022.md) does not mention it. No agent has signed in to, queried or changed Render, Supabase or GitHub, and no agent has seen a secret value. Every value shown is a placeholder in `<angle brackets>`. Ticket: OPS-022 (office repo `backlog/OPS-022.md`). Risks: R-032 (superuser DSN / RLS bypass) and R-070 (office-guard and `supabase/` reads).
 
 Evidence labels used throughout: **Verified** (evidence exists), **Observed** (seen in code or output), **Inferred** (reasoned, not proven), **Assumed** (missing information), **Unknown**. File references are to this repository at `origin/main` (`0533885`) unless another commit is named.
 
@@ -16,7 +16,7 @@ Evidence labels used throughout: **Verified** (evidence exists), **Observed** (s
 
 | § | Topic | State |
 |---|---|---|
-| 1 | Env var table, all 10 services | Written. It exposes **four render.yaml defects that stop services booting** (§1.4). Those block applying the Blueprint. |
+| 1 | Env var table, all 10 services | Written. It exposes render.yaml defects (§1.4): **two that stop services booting**, one that may (Unknown), one security defect (R-032) and one possibly ignored setting (Unknown). Together they block applying the Blueprint (G-1). |
 | 2 | Live JWKS and `SUPABASE_JWT_ALGORITHM` | Owner steps written. Algorithm: owner evidence says ES256, **not re-checked by an agent** |
 | 3 | Tether signing key pair | Steps written. **Custody is an open owner decision** (§10, D-3) |
 | 4 | Supabase service-role key | **Options only. The decision is open** (BE-047, OPS-034 DEC-KEY). Owner fields blank. |
@@ -52,7 +52,7 @@ Evidence labels used throughout: **Verified** (evidence exists), **Observed** (s
 
 - Keys in `render.yaml` that no schema names are silently ignored. Zod object parsing drops unknown keys, so they cause no error (Inferred from `z.object` default behaviour, not executed).
 
-**Source column key:** *literal* is a fixed value in `render.yaml`. *shared group* is `envVarGroups: tether-shared` (`render.yaml:249-270`). *auth group* is `tether-auth-secrets` (`render.yaml:272-281`). *sync:false* means the owner sets the value in the host dashboard and it never lives in git (`render.yaml:247-248`). *code default* means the variable is not in `render.yaml` and the default in code applies. **NOT SET** means it is required by code and absent from `render.yaml` (a defect, §1.4).
+**Source column key:** *literal* is a fixed value in `render.yaml`. *shared group* is `envVarGroups: tether-shared` (`render.yaml:249-270`). *auth group* is `tether-auth-secrets` (`render.yaml:272-281`). *sync:false* means the owner sets the value in the host dashboard and it never lives in git (`render.yaml:247-248`). Whether `sync: false` is honoured inside `envVarGroups` is in doubt (§1.4 item 5). *code default* means the variable is not in `render.yaml` and the default in code applies. **NOT SET** means it is required by code and absent from `render.yaml` (a defect, §1.4).
 
 ### 1.2 Base variables (every service)
 
@@ -83,7 +83,7 @@ Evidence labels used throughout: **Verified** (evidence exists), **Observed** (s
 |---|---|---|---|---|---|
 | api-gateway | `AUTH_SERVICE_URL`, `CATALOGUE_SERVICE_URL`, `ENROLMENT_SERVICE_URL`, `RECORDS_SERVICE_URL`, `CARE_TEAM_SERVICE_URL`, `NOTIFICATION_SERVICE_URL`, `WEBSITE_SERVICE_URL`, `CHRONIC_SERVICE_URL`, `REALTIME_SERVICE_URL` | `services/api-gateway/src/config.ts:16-24` (each `z.string().url()`, `:13`) | `fromService … property: connectionString` (`render.yaml:59-76`). **See FU-3** | no | `http://<service-internal-host>:<port>` |
 | api-gateway | `PROXY_TIMEOUT_MS` | `api-gateway/src/config.ts:34` | code default `15000` | no | `15000` |
-| api-gateway | `DATABASE_URL` | `api-gateway/src/config.ts:46` (optional; the gateway opens no pool) | inherited from the shared group (`render.yaml:57`) | yes if set | **leave unset** (§5) |
+| api-gateway | `DATABASE_URL` | `api-gateway/src/config.ts:46` (optional; the gateway opens no pool) | inherited from the shared group (`render.yaml:57`). At origin/main it **cannot** be left unset: the gateway receives the shared DSN through `fromGroup` | yes | intended: unset, once BE-001 moves `DATABASE_URL` per service (ROLES.md:221-225, §5) |
 | auth | `SUPABASE_JWKS_URL` | `services/auth-service/src/config.ts:39` | auth group, sync:false (`render.yaml:274-275`) | no | `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json` (path: **Assumed**; take the exact URL from the owner's JWKS step, §2) |
 | auth | `SUPABASE_ISSUER` | `auth-service/src/config.ts:40` | auth group, sync:false (`render.yaml:276-277`) | no | `https://<project-ref>.supabase.co/auth/v1` (**Assumed**; confirm against a token's `iss`, §2) |
 | auth | `SUPABASE_AUDIENCE` | `auth-service/src/config.ts:49` | code default `authenticated` | no | `authenticated` |
@@ -113,14 +113,15 @@ Not a Render service, listed for completeness: the seed tool `db/seeds/catalogue
 
 Under BE-001 (pending, not at origin/main): `TETHER_ALLOW_PRIVILEGED_DB_ROLE` is a local-development escape that is ignored when `NODE_ENV=production` (`git show 79685b2:db/ROLES.md`, lines 142-146). **Never set it on a hosted service.**
 
-### 1.4 Boot-blocking mismatches between `render.yaml` and the code (Observed)
+### 1.4 Mismatches between `render.yaml` and the code
 
-If the Blueprint at origin/main is applied as written:
+The mismatches are Observed. Their effects are labelled per item. If the Blueprint at origin/main is applied as written:
 
-1. **auth-service does not start.** `ACCESS_TOKEN_PRIVATE_KEY` and `ACCESS_TOKEN_PUBLIC_KEY` are required (`auth-service/src/config.ts:67,77`). `render.yaml` provides neither. It provides `JWT_PRIVATE_KEY_PEM`, which no code reads (`render.yaml:278`). (FU-1)
-2. **notification-service does not start.** `INTERNAL_API_TOKEN` is required (`notification-service/src/index.ts:80`) and is absent. `render.yaml` has `INTERNAL_SERVICE_TOKEN` in the auth group instead, and no code reads it (`render.yaml:280`). (FU-2)
+1. **auth-service does not start** (Inferred, strongly: `loadConfig` throws on a missing required key, `packages/core/src/config.ts:98-104`). `ACCESS_TOKEN_PRIVATE_KEY` and `ACCESS_TOKEN_PUBLIC_KEY` are required (`auth-service/src/config.ts:67,77`). `render.yaml` provides neither. It provides `JWT_PRIVATE_KEY_PEM`, which no code reads (`render.yaml:278`). (FU-1)
+2. **notification-service does not start** (Inferred, as item 1). `INTERNAL_API_TOKEN` is required (`notification-service/src/index.ts:80`) and is absent. `render.yaml` has `INTERNAL_SERVICE_TOKEN` in the auth group instead, and no code reads it (`render.yaml:280`). (FU-2)
 3. **The gateway's nine upstream URLs** use `property: connectionString` on `pserv` targets (`render.yaml:59-76`). The locally installed Render plugin reference lists only `host` and `hostport` for `pserv`/`web`. `hostport` also has no `http://` scheme, while the gateway expects a URL (`api-gateway/src/config.ts:13`). Whether Render accepts this is **Unknown** (not checked against Render; Inferred from the local plugin reference). (FU-3)
-4. **One shared `DATABASE_URL`** (`render.yaml:251-252`) contradicts the per-service roles (`config.ts:67` "Per service, with that service's own role"; §5). At origin/main nothing in `packages/` or `services/` refuses a superuser or BYPASSRLS role at boot (`git grep rolbypassrls` finds nothing; Observed). BE-001 adds that guard (pending). (R-032)
+4. **One shared `DATABASE_URL`: a security defect, not a boot failure.** A superuser DSN boots normally at origin/main, which is the R-032 problem. The shared value (`render.yaml:251-252`) contradicts the per-service roles (`config.ts:67` "Per service, with that service's own role"; §5). At origin/main nothing in `packages/` or `services/` refuses a superuser or BYPASSRLS role at boot (`git grep rolbypassrls` finds nothing; Observed). BE-001 adds that guard (pending). (R-032)
+5. **`sync: false` inside `envVarGroups` may be ignored.** The locally installed Render plugin reference says `sync: false` is not valid in env groups. `render.yaml:249-281` relies on it for `DATABASE_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`, `JWT_JWKS_URL`, `PUBLIC_API_URL`, `ALLOWED_ORIGINS`, `SUPABASE_JWKS_URL`, `SUPABASE_ISSUER` and the two auth-group keys. Live Render behaviour is **Unknown** (not checked against Render). The owner may have to enter those values by hand in the env-group screen. What a later Blueprint sync does to hand-entered group values is also Unknown. (FU-10)
 
 ### 1.5 Health checks (Observed)
 
@@ -130,7 +131,7 @@ If the Blueprint at origin/main is applied as written:
 - At origin/main, a healthy `/healthz` therefore says nothing about the database or the role. BE-001 makes a privileged role stop the process before it listens (ROLES.md:108-140, pending).
 - After each deploy, the owner checks `/readyz` on each service from inside the private network (ROLES.md:235-236).
 
-**Gate G-1:** do not apply the Blueprint until FU-1 to FU-4 are fixed on a reviewed branch, or until the owner records a decision to work around them by hand.
+**Gate G-1:** do not apply the Blueprint until FU-1 to FU-4 and FU-10 are fixed or resolved on a reviewed branch, or until the owner records a decision to work around them by hand.
 
 ---
 
@@ -146,9 +147,12 @@ Owner steps (Tier 4, owner's own machine and login):
 
 1. Open the project's JWKS document. It is the URL that will become `SUPABASE_JWKS_URL`. The usual path is `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json` (**Assumed**; confirm in the Supabase dashboard's JWT signing keys page). It is a public document, but fetch it yourself. Do not paste it into an agent chat.
 2. In the `keys` array, note each key's `alg` and `kid`. Do **not** record or share `x`, `y`, `n` or `e`. They are public, but nothing here needs them.
-3. If there is exactly one current signing key and its `alg` is `ES256`, set `SUPABASE_JWT_ALGORITHM=ES256` on `tether-auth`. If it is `RS256`, set `RS256`. The code accepts exactly one of the two (`auth-service/src/config.ts:51-60`).
-4. If the JWKS lists **keys with different `alg` values** (for example during a Supabase key rotation), stop. The service accepts one algorithm at a time by design (`config.ts:52-58`). Wait until the rotation completes, or record a decision.
-5. Sign in to a test account and decode the access token **locally**. Read `iss` and `aud`. Set `SUPABASE_ISSUER` to the exact `iss`. Keep `SUPABASE_AUDIENCE` at its default unless `aud` differs. Use a synthetic test account, never a patient's.
+3. If the JWKS lists **keys with different `alg` values** (for example a standby key during a Supabase key rotation), note that. Listing a key does not prove it signs today's tokens, so step 4 decides.
+4. Sign in to a **synthetic** test account (never a patient's) and decode the access token **locally**, both header and payload. Do not paste it into any online decoder or agent chat.
+   - From the **header**: read `alg` and `kid`. Confirm the `kid` appears in the JWKS from step 1.
+   - Set `SUPABASE_JWT_ALGORITHM` on `tether-auth` to the header's `alg` if it is `ES256` or `RS256`. The code accepts exactly one of those two (`auth-service/src/config.ts:51-60`).
+   - **If `alg` is `HS256`** (legacy shared-secret signing), or the `kid` is not in the JWKS: **stop**. The service cannot verify it (`config.ts:60`). Record the result and raise it as an owner decision. Do not change code to accept it.
+5. From the **payload**: set `SUPABASE_ISSUER` to the exact `iss`. Keep `SUPABASE_AUDIENCE` at its default unless `aud` differs.
 6. Record in the office run log: the date, the `alg` and `kid` values, and who checked. Record no token and no key material.
 
 `render.yaml` does not declare `SUPABASE_JWT_ALGORITHM`, so the code default `ES256` applies unless the owner sets it (follow-up FU-5: declare it explicitly).
@@ -186,7 +190,7 @@ openssl pkey -in access_token_private.pem -pubout -out access_token_public.pem
    - (a) host secret env var on `tether-auth` only, plus an offline backup in the owner's password or secret manager;
    - (b) a KMS, which the code anticipates but does not implement (`config.ts:72-75`): that needs code work first.
 2. Set `ACCESS_TOKEN_PRIVATE_KEY` and `ACCESS_TOKEN_PUBLIC_KEY` **on `tether-auth` only**, in the host dashboard. Never put them in `render.yaml`, in git, in a shared env group, in a chat or in a run log.
-3. Delete the working files after storing them (`rm -P` on macOS, or your secure-delete equivalent). Confirm `git status` in every checkout shows no `.pem`.
+3. Secure deletion is **not reliable** on SSD/APFS, and `rm -P` has no effect on current macOS (its man page says so). Instead, do §3.1 inside an encrypted volume (for example an encrypted disk image), or pipe the key straight into the secret manager. Then delete the files normally and eject or destroy the volume. Confirm `git status` in every checkout shows no `.pem`.
 4. Leave `ACCESS_TOKEN_KID` unset, so it defaults to the thumbprint (`config.ts:79-86`).
 5. After deploy, check `tether-auth`'s boot log line `signing key loaded` with a `kid` (`auth-service/src/index.ts:65`), then `GET /.well-known/jwks.json` from inside the private network, and confirm the `kid` matches.
 
@@ -248,10 +252,13 @@ Source: `git show 79685b2:db/ROLES.md` (branch `office/BE-001-rls-roles`, read o
 | notification | `tether_notification_login` | transaction pooler |
 | website | `tether_website_login` | transaction pooler |
 | chronic | `tether_chronic_login` | transaction pooler |
-| realtime | `tether_realtime_login` | **direct connection or session pooler**: `LISTEN` does not survive transaction pooling |
+| realtime | `tether_realtime_login` | **direct connection or session pooler**: `LISTEN` does not survive transaction pooling. Realtime uses this one DSN for its query pool as well as `LISTEN` (`services/realtime-service/src/index.ts:61-67`) |
 
-DSN shape (ROLES.md:208-212), placeholders only:
-`postgres://tether_<service>_login.<project-ref>:<password>@<host>:<port>/postgres?sslmode=require`
+DSN shapes (ROLES.md:208-217), placeholders only:
+- Eight services, transaction pooler: `postgres://tether_<service>_login.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=require`
+- realtime, session pooler: `postgres://tether_realtime_login.<project-ref>:<password>@<pooler-host>:5432/postgres?sslmode=require`. Session-pooler port 5432 is **Assumed**; confirm in the Supabase connect dialog.
+- realtime, direct connection: the user name is the plain role, `tether_realtime_login`, on the project's direct host. Whether Render can reach the direct host is **Unknown**: Supabase direct hosts may be IPv6-only (Inferred, not checked).
+- `DB_STATEMENT_TIMEOUT_MS` is sent as a connection setting (`packages/core/src/db.ts:78`). Whether the transaction pooler honours it is **Unknown**. Check it during the OPS-023 rehearsal.
 
 Rules from ROLES.md, cited, not restated in full:
 - Roles are created locked; the owner sets each password with `\password` and unlocks (lines 180-204).
@@ -290,7 +297,9 @@ Two independent paths could change production on a merge.
 |---|---|---|
 | 5a. Do not apply the Blueprint, and suspend or leave uncreated any hand-made services | nothing deploys | none in git |
 | 5b. `autoDeployTrigger: off` on every service, deploy manually after go | merges do not deploy | `render.yaml` change on a reviewed branch (not made here) |
-| 5c. Set `branch: deploy` (or another branch nobody pushes) | only a push to that branch deploys | `render.yaml` change, plus discipline on that branch |
+| 5c. Set `branch: <render-release-branch>`, a dedicated branch nobody pushes until go. It must **not** be `deploy` and must not be `main` | only a push to that branch deploys | `render.yaml` change, plus discipline on that branch |
+
+**Render's tracked branch must never be the Supabase integration's production branch** (`deploy`, BASELINE.md:108). Otherwise one push would deploy code and apply migrations at once, breaking the required order: migrations, then role unlock, then code (ROLES.md:227-236; OPS-021 plan S5/S6). (Inferred effect.)
 
 Until D-5 is decided: **do not merge to Backend `main`** while any Render service may be tracking it.
 
@@ -331,7 +340,7 @@ Emergency lock of one service's login role, from ROLES.md:27-29 (BE-001, pending
 
 1. Disable auto-deploy, or suspend all ten services.
 2. Delete the services and the two env groups (`tether-shared`, `tether-auth-secrets`).
-3. Rotate everything that was set there, treating it as exposed: each login role's password (ROLES.md:241-252), the Tether signing key (§3.3), `INTERNAL_API_TOKEN`, the Firebase service account (revoke the key in the Firebase console), and the service-role key if one was issued (§4).
+3. Rotate everything that was set there, treating it as exposed: **the `postgres`/superuser database password, if the shared `DATABASE_URL` (`render.yaml:251`) ever held it** (as ROLES.md:237-239 requires after cutover); each login role's password (ROLES.md:241-252), the Tether signing key (§3.3), `INTERNAL_API_TOKEN`, the Firebase service account (revoke the key in the Firebase console), and the service-role key if one was issued (§4).
 4. Remove any GitHub ↔ Render connection for this repository if hosting is abandoned.
 5. Leave the Supabase project and integration untouched unless OPS-023 says otherwise.
 6. Confirm in the billing view that nothing is still charging, and record the date. Billing behaviour is Unknown (§6).
@@ -362,7 +371,7 @@ Each item is Tier 3 to decide. Acting on any of them is Tier 4. Leave a field bl
 | D-7 | `SUPABASE_JWT_ALGORITHM` value after the owner's JWKS read | §2 | | |
 | D-8 | `JWT_ALGORITHM` for Tether tokens: keep `RS256` or change to `ES256` (key type follows) | §1.2, §3 | | |
 | D-9 | `ALLOWED_ORIGINS` and `PUBLIC_API_URL` exact values | §1.2 | | |
-| D-10 | Fix route for FU-1 to FU-4 (gate G-1) | §1.4, §11 | | |
+| D-10 | Fix route for FU-1 to FU-4 and FU-10 (gate G-1) | §1.4, §11 | | |
 
 ---
 
@@ -379,3 +388,4 @@ Each item is Tier 3 to decide. Acting on any of them is Tier 4. Leave a field bl
 | FU-7 | `autoDeploy` is deprecated per the local Render plugin reference (`autoDeployTrigger`) | `render.yaml:49` et al.; local plugin reference | Behaviour on newer Blueprint validation is Unknown |
 | FU-8 | Local compose: auth-service gets no `SUPABASE_*` or `ACCESS_TOKEN_*`; realtime-service gets no `DATABASE_URL`; `REDIS_URL` is set but read by nothing | `docker-compose.yml:242-252,418-428`; `git grep REDIS_URL` over `services` and `packages` finds nothing | `docker compose up` cannot boot those two services as written (Inferred) |
 | FU-9 | `npm run check` fails at origin/main: 388 ESLint errors (pre-existing) | `npm run check` at `0533885` (and identically at this doc's commit) ends `✖ 388 problems (388 errors, 0 warnings)`; reproduced by th-qa | Repo checks are not green at base. BE-002 territory |
+| FU-10 | `sync: false` used inside `envVarGroups`; the local Render plugin reference says it is not valid there | `render.yaml:247-281`; local plugin reference (not live docs) | Group secrets may not be prompted for, or may sync oddly (Unknown) |
