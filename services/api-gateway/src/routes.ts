@@ -37,9 +37,10 @@ export interface RouteEntry {
    * that name instead of removed. Absent means the root.
    *
    * website-service (`/waitlist`) and realtime-service (`/stream`) have the
-   * same shape but are deliberately not mapped yet: reaching them from the
-   * gateway exposes R-033, which is fixed only in BE-001.
-   * `test/composition.test.ts` lists them as known-unreachable.
+   * same shape and are in `DEFERRED_ROUTES`, not here: the gateway does not
+   * forward them at all, because mapping them exposes R-033, which is fixed only
+   * in BE-001. Mapping them (a `servicePath` each, moved into `ROUTES`) is the
+   * follow-up that depends on BE-001.
    */
   readonly servicePath?: string;
 }
@@ -60,8 +61,40 @@ export const ROUTES: readonly RouteEntry[] = [
   { prefix: '/api/v1/records', service: 'records-service', urlKey: 'RECORDS_SERVICE_URL' },
   { prefix: '/api/v1/care', service: 'care-team-service', urlKey: 'CARE_TEAM_SERVICE_URL' },
   { prefix: '/api/v1/notifications', service: 'notification-service', urlKey: 'NOTIFICATION_SERVICE_URL' },
-  { prefix: '/api/v1/waitlist', service: 'website-service', urlKey: 'WEBSITE_SERVICE_URL' },
   { prefix: '/api/v1/chronic', service: 'chronic-service', urlKey: 'CHRONIC_SERVICE_URL' },
+];
+
+/**
+ * Prefixes the gateway refuses to forward, in any spelling, until BE-001.
+ *
+ * website-service serves `POST /waitlist`, an unauthenticated
+ * `DELETE /waitlist/:id` and `POST /waitlist/purge`; realtime-service serves
+ * `GET /stream`, which broadcasts revocations to every subscriber. Those are the
+ * open R-033 holes (compliance/risk-register.md:45), and they are fixed only in
+ * BE-001.
+ *
+ * Both services mount their routes under their own resource name, and neither
+ * has a `servicePath` here, so forwarding the prefix with the usual strip would
+ * deliver `/api/v1/waitlist/waitlist/<id>` as `/waitlist/<id>`: a doubled path
+ * reaching the hole. (At BE-049 they were in `ROUTES` without a `servicePath`:
+ * the bare prefix arrived as `/` and 404ed, but the doubled form was forwarded
+ * and reached the handler. Found in review; fixed in BE-053.)
+ *
+ * The fail-closed fix is to not route them at all. `src/app.ts` mounts one proxy
+ * per `ROUTES` entry and nothing else, so a prefix absent from `ROUTES` is never
+ * proxied: the request falls through to the gateway's own 404, or to a 401 first
+ * on a path that is not on the `isPublic` allowlist. That holds for every
+ * spelling, because no spelling matches a table that does not list the prefix.
+ * Listing them here keeps the decision visible, lets the tests state the
+ * expectation, and leaves the `*_SERVICE_URL` variables in `config.ts`
+ * required, so deployment config does not change.
+ *
+ * To map one after BE-001: move its entry into `ROUTES` with a `servicePath`
+ * (`/waitlist`, `/stream`) and remove it from this list and from
+ * `DEFERRED_PREFIXES` in `test/composition.test.ts`.
+ */
+export const DEFERRED_ROUTES: readonly RouteEntry[] = [
+  { prefix: '/api/v1/waitlist', service: 'website-service', urlKey: 'WEBSITE_SERVICE_URL' },
   { prefix: '/api/v1/stream', service: 'realtime-service', urlKey: 'REALTIME_SERVICE_URL' },
 ];
 
@@ -105,7 +138,10 @@ export function stripServicePrefix(prefix: string, url: string): string {
   return `${mount}${rest}`;
 }
 
-/** The route serving `pathname`, or null. */
+/**
+ * The route serving `pathname`, or null. Null also for anything under a
+ * `DEFERRED_ROUTES` prefix: those are deliberately not served.
+ */
 export function routeFor(pathname: string): RouteEntry | null {
   return ROUTES.find((route) => matchesPrefix(route.prefix, pathname)) ?? null;
 }
@@ -129,6 +165,9 @@ export function routeFor(pathname: string): RouteEntry | null {
  *   action and stay behind a token.
  * - `/api/v1/waitlist` — the enquiry form on a static marketing site. There is
  *   no account yet, by definition.
+ *   Moot while `/api/v1/waitlist` is in `DEFERRED_ROUTES`: the gateway lets the
+ *   request past the token check and then answers 404, because nothing proxies
+ *   it. This entry takes effect when the waitlist is mapped after BE-001.
  * - `/healthz`, `/readyz` — the orchestrator has no credentials.
  * - Any `OPTIONS` — a CORS preflight is sent by the browser without the
  *   `Authorization` header it is asking permission to send. 401-ing a preflight

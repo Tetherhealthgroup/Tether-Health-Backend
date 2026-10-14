@@ -11,7 +11,13 @@ import { catalogueRoutes } from "../../catalogue-service/src/routes.ts";
 import { enrolmentRoutes } from "../../enrolment-service/src/routes.ts";
 import { createRecordsApp } from "../../records-service/src/app.ts";
 import { createCareTeamApp } from "../../care-team-service/src/app.ts";
-import { routeFor, stripServicePrefix } from "../src/routes.ts";
+import {
+  DEFERRED_ROUTES,
+  ROUTES,
+  matchesPrefix,
+  routeFor,
+  stripServicePrefix,
+} from "../src/routes.ts";
 
 /**
  * The gateway's path rewrite composed with each service's real routes.
@@ -194,7 +200,9 @@ function inlineRoutes(
       const regex = (match[2] ?? "").replace(/:[A-Za-z]+/g, "[^/]+");
       found.push({
         method: (match[1] ?? "").toUpperCase(),
-        pattern: new RegExp(`^${regex}/?$`),
+        // Express matches paths case-insensitively and without a trailing slash
+        // by default, so the scan has to as well.
+        pattern: new RegExp(`^${regex}/?$`, "i"),
       });
     }
   }
@@ -369,7 +377,20 @@ async function reachesHandler(
   detail: string;
 }> {
   const route = routeFor(documented.path);
-  assert.ok(route, `no gateway route serves ${documented.path}`);
+  if (!route) {
+    // Not forwarded: the gateway answers 404 (or 401 first when a token is
+    // required). Only a deferred prefix may be absent from the table.
+    assert.ok(
+      DEFERRED_ROUTES.some((deferred) => matchesPrefix(deferred.prefix, documented.path)),
+      `no gateway route serves ${documented.path}`,
+    );
+    return {
+      service: "none",
+      forwarded: documented.path,
+      reached: false,
+      detail: "not forwarded: deferred prefix",
+    };
+  }
   const forwarded = stripServicePrefix(route.prefix, documented.path);
 
   const app = SERVICE_APPS[route.service];
@@ -405,13 +426,23 @@ const ALL_DOCUMENTED: readonly Documented[] = [
 /**
  * Documented public paths that do not reach a handler today, on purpose.
  *
- * Both 404 behind the gateway because it forwards them as `/` while their
- * services mount `/waitlist` and `/stream`. Mapping them would make them
- * reachable, and with them two open R-033 holes (compliance/risk-register.md:45):
- * website-service's unauthenticated `DELETE /waitlist/:id` (the gateway allowlist
- * exempts all of `/api/v1/waitlist/*`) and realtime-service's revocation
- * broadcast to every subscriber. R-033 is fixed only in BE-001, so mapping them
- * is deferred to a follow-up ticket that depends on BE-001.
+ * The gateway does not forward them: `/api/v1/waitlist` and `/api/v1/stream` are
+ * in `DEFERRED_ROUTES`, absent from `ROUTES`, so they and everything beneath
+ * them answer 404 at the gateway (401 first for a path that needs a token).
+ * Mapping them would make them reachable, and with them two open R-033 holes
+ * (compliance/risk-register.md:45): website-service's unauthenticated
+ * `DELETE /waitlist/:id` (the gateway allowlist exempts all of
+ * `/api/v1/waitlist/*`) and realtime-service's revocation broadcast to every
+ * subscriber. R-033 is fixed only in BE-001, so mapping them is deferred to a
+ * follow-up ticket that depends on BE-001.
+ *
+ * Correction to BE-049: it described these as unreachable because the bare
+ * prefix is forwarded as `/`, which both services 404. That was true of the
+ * documented paths only. The doubled forms `DELETE /api/v1/waitlist/waitlist/<id>`
+ * (public, no token) and `GET /api/v1/stream/stream` (any valid token) were
+ * forwarded as `/waitlist/<id>` and `/stream` and did reach the holes. They are
+ * refused now because the prefixes are not routed at all; the tests below cover
+ * the spellings.
  *
  * The test asserts the unreachable set equals this list exactly: a new
  * unreachable path fails it, and so does one of these becoming reachable
@@ -424,7 +455,7 @@ const KNOWN_UNREACHABLE: readonly string[] = [
   "GET /api/v1/stream",
 ];
 
-void test("every documented public path reaches a handler, except the two deferred until BE-001", async () => {
+void test("every documented public path reaches a handler, except the two the gateway does not forward until BE-001", async () => {
   const unreachable = new Map<string, string>();
   for (const documented of ALL_DOCUMENTED) {
     const result = await reachesHandler(documented);
@@ -475,4 +506,175 @@ void test("src/proxy.ts rewrites with the same function this test composes", () 
     proxy,
     /pathRewrite:\s*\(path\)\s*=>\s*stripServicePrefix\(route\.prefix,\s*path\)/,
   );
+});
+
+// ---------------------------------------------------------------------------
+// Doubled prefixes and deferred prefixes (BE-053, R-033)
+// ---------------------------------------------------------------------------
+
+/**
+ * The prefixes the gateway must not forward at all until the BE-001 follow-up
+ * maps them. Spelled out here, independently of `src/routes.ts`, so the test
+ * cannot pass by the table and the expectation drifting together; a test below
+ * cross-checks the two.
+ */
+const DEFERRED_PREFIXES: readonly string[] = [
+  "/api/v1/waitlist",
+  "/api/v1/stream",
+];
+
+const SYNTHETIC_ID = "00000000-0000-4000-8000-000000000000";
+
+/** Every spelling of a path under a deferred prefix that an attacker could try. */
+function deferredVariants(): Array<{ method: string; path: string }> {
+  const out: Array<{ method: string; path: string }> = [];
+  const methods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  for (const prefix of DEFERRED_PREFIXES) {
+    const word = prefix.split("/").pop() ?? "";
+    const upper = prefix.replace(word, word.toUpperCase());
+    const title = prefix.replace(word, `${word[0]?.toUpperCase()}${word.slice(1)}`);
+    const encoded = prefix.replace(word, `%${word.charCodeAt(0).toString(16)}${word.slice(1)}`);
+    const paths = [
+      prefix,
+      `${prefix}/`,
+      `${prefix}?x=1`,
+      `${prefix}/${word}`,
+      `${prefix}/${word}/`,
+      `${prefix}/${word}//`,
+      `${prefix}/${word}?x=1`,
+      `${prefix}/${word}/${SYNTHETIC_ID}`,
+      `${prefix}/${word}/${SYNTHETIC_ID}/`,
+      `${prefix}/${word.toUpperCase()}`,
+      `${prefix}/${word.toUpperCase()}/${SYNTHETIC_ID}`,
+      `${prefix}/${word[0]?.toUpperCase()}${word.slice(1)}/`,
+      `${prefix}//${word}`,
+      `${prefix}//${word}//${SYNTHETIC_ID}`,
+      `${prefix}/${encoded.split("/").pop()}/${SYNTHETIC_ID}`,
+      `${prefix}/%2e%2e/${word}`,
+      `${prefix}/${SYNTHETIC_ID}`,
+      `${prefix}/purge`,
+      // the prefix itself, in other spellings
+      upper,
+      `${upper}/${SYNTHETIC_ID}`,
+      title,
+      `${title}/${word}/`,
+      `${encoded}/${SYNTHETIC_ID}`,
+      `${prefix}/`.replace("/api/v1/", "/api/v1//"),
+    ];
+    for (const path of paths) {
+      for (const method of methods) out.push({ method, path });
+    }
+  }
+  return out;
+}
+
+void test("no path under a deferred prefix is forwarded by the gateway (R-033)", () => {
+  const forwarded = deferredVariants().filter(({ path }) => routeFor(path) !== null);
+  assert.deepEqual(
+    forwarded.map(({ method, path }) => `${method} ${path} -> ${routeFor(path)?.service}`),
+    [],
+    "these would reach a service handler, bypassing the R-033 deferral",
+  );
+});
+
+void test("the named R-033 holes are not forwarded", () => {
+  for (const [method, path] of [
+    ["DELETE", `/api/v1/waitlist/waitlist/${SYNTHETIC_ID}`],
+    ["POST", "/api/v1/waitlist/waitlist"],
+    ["GET", "/api/v1/stream/stream"],
+    ["DELETE", `/api/v1/waitlist/WAITLIST/${SYNTHETIC_ID}`],
+    ["GET", "/api/v1/stream/stream/"],
+  ] as const) {
+    assert.equal(routeFor(path), null, `${method} ${path}`);
+  }
+});
+
+void test("the doubled service prefix of every routed service does not reach a handler", async () => {
+  const reached: string[] = [];
+  for (const route of ROUTES) {
+    const segment = route.prefix.split("/").pop() ?? "";
+    const spellings = [
+      `${route.prefix}/${segment}`,
+      `${route.prefix}/${segment}/`,
+      `${route.prefix}/${segment.toUpperCase()}`,
+      `${route.prefix}/${segment}/${SYNTHETIC_ID}`,
+      `${route.prefix}//${segment}`,
+      `${route.prefix}/${segment}?x=1`,
+    ];
+    for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
+      for (const path of spellings) {
+        const matched = routeFor(path);
+        if (matched === null) continue;
+        const forwarded = stripServicePrefix(matched.prefix, path);
+        const app = SERVICE_APPS[matched.service];
+        let hit: boolean;
+        if (app) {
+          const outcome = await dispatch(app, method, forwarded);
+          hit = !outcome.unmatched && outcome.status !== 404;
+        } else {
+          const pathOnly = forwarded.split("?")[0] ?? forwarded;
+          hit = inlineRoutes(matched.service).some(
+            (candidate) =>
+              candidate.method === method && candidate.pattern.test(pathOnly),
+          );
+        }
+        // `PATCH /enrolments/:areaId` is a real route, so `/enrolments/enrolments`
+        // is that route with `areaId = "enrolments"`: guarded by the token check,
+        // and a 404 from the service's own lookup after it. A path parameter
+        // legitimately takes any one segment; it is not a doubled prefix reaching
+        // a different handler.
+        const isAreaParameter =
+          matched.service === "enrolment-service" &&
+          method === "PATCH" &&
+          /^\/enrolments\/[^/?]+\/?(\?.*)?$/.test(forwarded);
+        if (hit && !isAreaParameter) reached.push(`${method} ${path} -> ${matched.service} as ${forwarded}`);
+      }
+    }
+  }
+  assert.deepEqual(reached, [], "a doubled prefix reaches a service handler");
+});
+
+void test("the enrolment paths that work still work and the doubled one does not", async () => {
+  const enrolment = SERVICE_APPS["enrolment-service"];
+  assert.ok(enrolment);
+  const forwardedOf = (path: string): string => {
+    const route = routeFor(path);
+    assert.ok(route, path);
+    return stripServicePrefix(route.prefix, path);
+  };
+  assert.equal(routeFor("/api/v1/enrolments")?.service, "enrolment-service");
+  const doubled = await dispatch(
+    enrolment,
+    "GET",
+    forwardedOf("/api/v1/enrolments/enrolments"),
+  );
+  assert.equal(doubled.unmatched, true);
+});
+
+void test("src/app.ts mounts a proxy for each ROUTES entry and nothing else", () => {
+  // Deferral is enforced by what `ROUTES` contains, because `src/app.ts` builds
+  // its proxies from it. `routeFor` is not on the request path, so a deferred
+  // flag that only `routeFor` honoured would leave the gateway forwarding.
+  const app = readFileSync(new URL("../src/app.ts", import.meta.url), "utf8");
+  assert.match(app, /for \(const route of ROUTES\) \{/);
+  assert.equal((app.match(/createServiceProxy\(/g) ?? []).length, 1);
+});
+
+void test("DEFERRED_PREFIXES here and DEFERRED_ROUTES in src/routes.ts agree, and none is also routed", () => {
+  assert.deepEqual(
+    DEFERRED_ROUTES.map((route) => route.prefix).sort(),
+    [...DEFERRED_PREFIXES].sort(),
+  );
+  for (const deferred of DEFERRED_ROUTES) {
+    assert.equal(
+      ROUTES.some((route) => route.prefix === deferred.prefix || route.service === deferred.service || route.urlKey === deferred.urlKey),
+      false,
+      `${deferred.prefix} is both routed and deferred`,
+    );
+  }
+  // Every deferred path in KNOWN_UNREACHABLE is under a deferred prefix.
+  for (const entry of KNOWN_UNREACHABLE) {
+    const path = entry.split(" ")[1] ?? "";
+    assert.ok(DEFERRED_PREFIXES.some((prefix) => matchesPrefix(prefix, path)), entry);
+  }
 });
