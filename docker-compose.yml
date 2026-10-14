@@ -193,7 +193,6 @@ services:
       SERVICE_NAME: api-gateway
       PORT: '8000'
       DATABASE_URL: ${GATEWAY_DATABASE_URL}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/0
       # Where the gateway forwards to. Container names on the compose network;
       # none of these is resolvable from the host, which is the point.
       AUTH_SERVICE_URL: http://auth-service:8001
@@ -249,7 +248,25 @@ services:
       SERVICE_NAME: auth-service
       PORT: '8001'
       DATABASE_URL: ${AUTH_DATABASE_URL}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/1
+      # Upstream: Supabase Auth, verified by this service only. No default: the
+      # URLs name whichever Supabase project (or local CLI stack) the developer
+      # points at, and a hosted project is not a default worth shipping.
+      SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL}
+      SUPABASE_ISSUER: ${SUPABASE_ISSUER}
+      SUPABASE_AUDIENCE: ${SUPABASE_AUDIENCE:-authenticated}
+      SUPABASE_JWT_ALGORITHM: ${SUPABASE_JWT_ALGORITHM:-ES256}
+      # Downstream: the keypair for Tether's own access tokens. Passed through
+      # from the developer's shell or an untracked env file, never given a
+      # default here: a placeholder PEM would pass the boot-time shape check and
+      # then fail on first signature, and a real one must not live in this file.
+      ACCESS_TOKEN_PRIVATE_KEY: ${ACCESS_TOKEN_PRIVATE_KEY}
+      ACCESS_TOKEN_PUBLIC_KEY: ${ACCESS_TOKEN_PUBLIC_KEY}
+      # Optional in the schema, and an empty string is NOT "absent" to it
+      # (`min(1)`), so no `:-` default. Null value = pass through if set, else
+      # leave unset, and the service falls back to the key's thumbprint.
+      ACCESS_TOKEN_KID:
+      ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
     expose:
       - '8001'
     depends_on: *depends-on-data
@@ -270,7 +287,6 @@ services:
       SERVICE_NAME: catalogue-service
       PORT: '8002'
       DATABASE_URL: ${CATALOGUE_DATABASE_URL}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_local_only}@redis:6379/2
     expose:
       - '8002'
     depends_on: *depends-on-data
@@ -424,6 +440,9 @@ services:
       <<: *service-env
       SERVICE_NAME: realtime-service
       PORT: '8009'
+      # Same per-service pattern as the other services: `<SERVICE>_DATABASE_URL`,
+      # so each service can be given its own role rather than a shared one.
+      DATABASE_URL: ${REALTIME_DATABASE_URL}
       SSE_HEARTBEAT_SECONDS: ${SSE_HEARTBEAT_SECONDS:-25}
       SSE_MAX_SUBSCRIBERS: ${SSE_MAX_SUBSCRIBERS:-2000}
     expose:
