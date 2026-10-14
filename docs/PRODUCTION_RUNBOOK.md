@@ -6,7 +6,7 @@
 > - **Approving or using it is Tier 3, and the owner does it.**
 > - **Executing any step in it is Tier 4. Only the owner does that, under their own login.**
 >
-> No agent may run a step below. No agent has contacted Render, Supabase or GitHub to write this, and no agent has seen a secret value. Every value shown is a placeholder in `<angle brackets>`. Ticket: OPS-022 (office repo `backlog/OPS-022.md`). Risks: R-032 (superuser DSN / RLS bypass) and R-070 (office-guard and `supabase/` reads).
+> No agent may run a step below. The only external contact made to write this was one read-only fetch of Render's public pricing page (§6), which the dispatch permitted. No agent has signed in to, queried or changed Render, Supabase or GitHub, and no agent has seen a secret value. Every value shown is a placeholder in `<angle brackets>`. Ticket: OPS-022 (office repo `backlog/OPS-022.md`). Risks: R-032 (superuser DSN / RLS bypass) and R-070 (office-guard and `supabase/` reads).
 
 Evidence labels used throughout: **Verified** (evidence exists), **Observed** (seen in code or output), **Inferred** (reasoned, not proven), **Assumed** (missing information), **Unknown**. File references are to this repository at `origin/main` (`0533885`) unless another commit is named.
 
@@ -121,6 +121,14 @@ If the Blueprint at origin/main is applied as written:
 2. **notification-service does not start.** `INTERNAL_API_TOKEN` is required (`notification-service/src/index.ts:80`) and is absent. `render.yaml` has `INTERNAL_SERVICE_TOKEN` in the auth group instead, and no code reads it (`render.yaml:280`). (FU-2)
 3. **The gateway's nine upstream URLs** use `property: connectionString` on `pserv` targets (`render.yaml:59-76`). The locally installed Render plugin reference lists only `host` and `hostport` for `pserv`/`web`. `hostport` also has no `http://` scheme, while the gateway expects a URL (`api-gateway/src/config.ts:13`). Whether Render accepts this is **Unknown** (not checked against Render; Inferred from the local plugin reference). (FU-3)
 4. **One shared `DATABASE_URL`** (`render.yaml:251-252`) contradicts the per-service roles (`config.ts:67` "Per service, with that service's own role"; §5). At origin/main nothing in `packages/` or `services/` refuses a superuser or BYPASSRLS role at boot (`git grep rolbypassrls` finds nothing; Observed). BE-001 adds that guard (pending). (R-032)
+
+### 1.5 Health checks (Observed)
+
+- `render.yaml` sets `healthCheckPath: /healthz` on all ten services (`render.yaml:48,86,105,123,141,159,177,199,217,235`).
+- `/healthz` is liveness only. It always answers `{status: 'up'}` and touches no dependency (`packages/core/src/http.ts:225-227`).
+- `/readyz` returns 503 when the service's readiness check fails (`http.ts:229-239`).
+- At origin/main, a healthy `/healthz` therefore says nothing about the database or the role. BE-001 makes a privileged role stop the process before it listens (ROLES.md:108-140, pending).
+- After each deploy, the owner checks `/readyz` on each service from inside the private network (ROLES.md:235-236).
 
 **Gate G-1:** do not apply the Blueprint until FU-1 to FU-4 are fixed on a reviewed branch, or until the owner records a decision to work around them by hand.
 
@@ -370,4 +378,4 @@ Each item is Tier 3 to decide. Acting on any of them is Tier 4. Leave a field bl
 | FU-6 | JWKS publishes one key, so rotation has no overlap | `auth-service/src/tokens.ts:128-139` | Up to one TTL of failed verifications per rotation (Inferred) |
 | FU-7 | `autoDeploy` is deprecated per the local Render plugin reference (`autoDeployTrigger`) | `render.yaml:49` et al.; local plugin reference | Behaviour on newer Blueprint validation is Unknown |
 | FU-8 | Local compose: auth-service gets no `SUPABASE_*` or `ACCESS_TOKEN_*`; realtime-service gets no `DATABASE_URL`; `REDIS_URL` is set but read by nothing | `docker-compose.yml:242-252,418-428`; `git grep REDIS_URL` over `services` and `packages` finds nothing | `docker compose up` cannot boot those two services as written (Inferred) |
-| FU-9 | `npm run check` fails at origin/main: 388 ESLint errors (pre-existing) | run log `runs/2026-10-14-OPS-022-prod-runbook.md` | Repo checks are not green at base. BE-002 territory |
+| FU-9 | `npm run check` fails at origin/main: 388 ESLint errors (pre-existing) | `npm run check` at `0533885` (and identically at this doc's commit) ends `✖ 388 problems (388 errors, 0 warnings)`; reproduced by th-qa | Repo checks are not green at base. BE-002 territory |
