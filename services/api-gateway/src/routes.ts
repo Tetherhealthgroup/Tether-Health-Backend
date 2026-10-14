@@ -32,10 +32,14 @@ export interface RouteEntry {
    * Where the service itself mounts its routes, when that is not its root.
    *
    * Most services mount at `/` (`POST /sessions`), so the whole public prefix
-   * is stripped. enrolment-service (`/enrolments…`), website-service
-   * (`/waitlist…`) and realtime-service (`/stream`) put the resource name in
-   * their own route paths, so for them the public prefix is rewritten to that
-   * name instead of removed. Absent means the root.
+   * is stripped. Only enrolment-service (`/enrolments...`) carries the resource
+   * name in its own route paths, so for it the public prefix is rewritten to
+   * that name instead of removed. Absent means the root.
+   *
+   * website-service (`/waitlist`) and realtime-service (`/stream`) have the
+   * same shape but are deliberately not mapped yet: reaching them from the
+   * gateway exposes R-033, which is fixed only in BE-001.
+   * `test/composition.test.ts` lists them as known-unreachable.
    */
   readonly servicePath?: string;
 }
@@ -56,9 +60,9 @@ export const ROUTES: readonly RouteEntry[] = [
   { prefix: '/api/v1/records', service: 'records-service', urlKey: 'RECORDS_SERVICE_URL' },
   { prefix: '/api/v1/care', service: 'care-team-service', urlKey: 'CARE_TEAM_SERVICE_URL' },
   { prefix: '/api/v1/notifications', service: 'notification-service', urlKey: 'NOTIFICATION_SERVICE_URL' },
-  { prefix: '/api/v1/waitlist', service: 'website-service', urlKey: 'WEBSITE_SERVICE_URL', servicePath: '/waitlist' },
+  { prefix: '/api/v1/waitlist', service: 'website-service', urlKey: 'WEBSITE_SERVICE_URL' },
   { prefix: '/api/v1/chronic', service: 'chronic-service', urlKey: 'CHRONIC_SERVICE_URL' },
-  { prefix: '/api/v1/stream', service: 'realtime-service', urlKey: 'REALTIME_SERVICE_URL', servicePath: '/stream' },
+  { prefix: '/api/v1/stream', service: 'realtime-service', urlKey: 'REALTIME_SERVICE_URL' },
 ];
 
 /**
@@ -84,8 +88,8 @@ export function matchesPrefix(prefix: string, pathname: string): boolean {
  * makes them runnable on their own in a test and keeps the public URL shape a
  * gateway decision. Most mount at their own root: the auth service serves
  * `POST /sessions`, not `POST /api/v1/auth/sessions`, so the prefix is removed.
- * A service whose routes carry the resource name (`servicePath` on its
- * `ROUTES` entry) gets the prefix replaced by that name, so
+ * A service with a `servicePath` on its `ROUTES` entry (today only
+ * enrolment-service) gets the prefix replaced by that name, so
  * `GET /api/v1/enrolments` arrives as `GET /enrolments`.
  * `test/composition.test.ts` checks the result against each service's routes.
  *

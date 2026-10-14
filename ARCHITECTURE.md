@@ -126,7 +126,9 @@ Every citation in this section is to `Tether-Health` at `origin/develop` `7b9dab
 - **Firebase is still server-side only.** `firebase-admin` is declared only by
   `notification-service` (`services/notification-service/package.json:17`), which
   says the app receives pushes through the operating system and never links a
-  Firebase SDK (`services/notification-service/src/push.ts:16-17`). The app's
+  Firebase SDK, and states that addendum section 3.2 forbids third-party SDKs on
+  child profiles (`services/notification-service/src/push.ts:15-16`; that is the
+  file's own statement, the addendum is not in this repo). The app's
   `pubspec.yaml:9-19` lists no Firebase package.
 
 ## What is inherited from AmericanGroupLLC-Backend

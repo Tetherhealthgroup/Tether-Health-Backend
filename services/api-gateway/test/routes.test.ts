@@ -56,28 +56,27 @@ test('the query string is preserved across stripping', () => {
     '/answers?enrolment=abc&limit=50',
   );
   // Prefix with nothing but a query after it still needs a path on the wire.
-  assert.equal(stripServicePrefix('/api/v1/care', '/api/v1/care?page=2'), '/?page=2');
-  // A service that mounts at its resource name keeps that name.
-  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist?source=astro'), '/waitlist?source=astro');
+  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist?source=astro'), '/?source=astro');
 });
 
 test('a bare prefix becomes the downstream root, not the empty string', () => {
-  // `POST ` is not a request line.
-  assert.equal(stripServicePrefix('/api/v1/care', '/api/v1/care'), '/');
-  assert.equal(stripServicePrefix('/api/v1/care', '/api/v1/care/'), '/');
+  // `POST /api/v1/waitlist` is the website form's only endpoint; it must arrive
+  // at website-service as `POST /`, and `POST ` is not a request line.
+  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist'), '/');
+  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist/'), '/');
 });
 
-void test('a service mounted at its resource name receives that name (BE-049)', () => {
-  // `POST /api/v1/waitlist` is the website form's only endpoint; website-service
-  // serves it at `/waitlist`, not at `/`. Same shape for enrolments and stream.
-  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist'), '/waitlist');
-  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist/'), '/waitlist/');
+void test('enrolment-service receives its resource name (BE-049)', () => {
+  // enrolment-service serves `/enrolments...`, so the public prefix is rewritten
+  // to that name rather than removed. Waitlist and stream are deliberately
+  // unchanged (they arrive at `/`) until BE-001 lands; see composition.test.ts.
   assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments'), '/enrolments');
+  assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments/'), '/enrolments/');
   assert.equal(
     stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments/tobacco/sharing?x=1'),
     '/enrolments/tobacco/sharing?x=1',
   );
-  assert.equal(stripServicePrefix('/api/v1/stream', '/api/v1/stream'), '/stream');
+  assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments?limit=5'), '/enrolments?limit=5');
 });
 
 test('a path outside the prefix is returned untouched', () => {
