@@ -97,7 +97,7 @@ Evidence labels used throughout: **Verified** (evidence exists), **Observed** (s
 | auth | `INTERNAL_SERVICE_TOKEN` | **consumed by nothing** (`git grep` shows `render.yaml:280` only) | auth group, sync:false (`render.yaml:280-281`) | would be yes | **do not set. FU-2** |
 | notification | `FIREBASE_SERVICE_ACCOUNT_JSON` | `services/notification-service/src/index.ts:69` (optional; absent means push is disabled) | sync:false (`render.yaml:189-190`) | **yes** | `<firebase-service-account-json>` |
 | notification | `FIREBASE_PROJECT_ID` | `notification-service/src/index.ts:70` (optional) | not in `render.yaml` | no | `<firebase-project-id>` |
-| notification | `INTERNAL_API_TOKEN` | `notification-service/src/index.ts:80` (**required**, min 32 chars, no default) | **NOT SET. FU-2** | **yes** | `<random-hex-64-chars>` |
+| notification | `INTERNAL_API_TOKEN` | `notification-service/src/index.ts:80` (**required**, min 32 chars, no default) | **NOT SET. FU-2** | **yes** | `<random-hex-64-chars>`. Owner generates it (for example `openssl rand -hex 32`) and sets it on `tether-notification` and, if one exists, the caller of its `POST /send`. That caller is not identified in `render.yaml` (Unknown) |
 | website | `WAITLIST_DEDUPE_WINDOW_MS` | `services/website-service/src/index.ts:49` | code default `900000` | no | `900000` |
 | website | `WAITLIST_RATE_LIMIT_MAX` | `website-service/src/index.ts:57` | code default `5` | no | `5` |
 | website | `WAITLIST_RATE_LIMIT_WINDOW_MS` | `website-service/src/index.ts:58-62` | code default `3600000` | no | `3600000` |
@@ -128,7 +128,7 @@ The mismatches are Observed. Their effects are labelled per item. If the Bluepri
 - `render.yaml` sets `healthCheckPath: /healthz` on all ten services (`render.yaml:48,86,105,123,141,159,177,199,217,235`).
 - `/healthz` is liveness only. It always answers `{status: 'up'}` and touches no dependency (`packages/core/src/http.ts:225-227`).
 - `/readyz` returns 503 when the service's readiness check fails (`http.ts:229-239`).
-- At origin/main, a healthy `/healthz` therefore says nothing about the database or the role. BE-001 makes a privileged role stop the process before it listens (ROLES.md:108-140, pending).
+- At origin/main, a healthy `/healthz` therefore says nothing about the database or the role. BE-001 makes a privileged role stop the process before it listens (ROLES.md:108-140, pending). That guard checks only `rolsuper` and `rolbypassrls`. It does not catch a login that owns the tables or inherits the owner's rights (office risk register R-073). **It is not the control. Choosing the right DSN (§5) is.**
 - After each deploy, the owner checks `/readyz` on each service from inside the private network (ROLES.md:235-236).
 
 **Gate G-1:** do not apply the Blueprint until FU-1 to FU-4 and FU-10 are fixed or resolved on a reviewed branch, or until the owner records a decision to work around them by hand.
@@ -148,7 +148,7 @@ Owner steps (Tier 4, owner's own machine and login):
 1. Open the project's JWKS document. It is the URL that will become `SUPABASE_JWKS_URL`. The usual path is `https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json` (**Assumed**; confirm in the Supabase dashboard's JWT signing keys page). It is a public document, but fetch it yourself. Do not paste it into an agent chat.
 2. In the `keys` array, note each key's `alg` and `kid`. Do **not** record or share `x`, `y`, `n` or `e`. They are public, but nothing here needs them.
 3. If the JWKS lists **keys with different `alg` values** (for example a standby key during a Supabase key rotation), note that. Listing a key does not prove it signs today's tokens, so step 4 decides.
-4. Sign in to a **synthetic** test account (never a patient's) and decode the access token **locally**, both header and payload. Do not paste it into any online decoder or agent chat.
+4. Sign in to a **synthetic** test account (never a patient's) and decode the access token **locally**, both header and payload. Do not paste it into any online decoder or agent chat, and keep it out of shell history and clipboard managers.
    - From the **header**: read `alg` and `kid`. Confirm the `kid` appears in the JWKS from step 1.
    - Set `SUPABASE_JWT_ALGORITHM` on `tether-auth` to the header's `alg` if it is `ES256` or `RS256`. The code accepts exactly one of those two (`auth-service/src/config.ts:51-60`).
    - **If `alg` is `HS256`** (legacy shared-secret signing), or the `kid` is not in the JWKS: **stop**. The service cannot verify it (`config.ts:60`). Record the result and raise it as an owner decision. Do not change code to accept it.
@@ -252,7 +252,7 @@ Source: `git show 79685b2:db/ROLES.md` (branch `office/BE-001-rls-roles`, read o
 | notification | `tether_notification_login` | transaction pooler |
 | website | `tether_website_login` | transaction pooler |
 | chronic | `tether_chronic_login` | transaction pooler |
-| realtime | `tether_realtime_login` | **direct connection or session pooler**: `LISTEN` does not survive transaction pooling. Realtime uses this one DSN for its query pool as well as `LISTEN` (`services/realtime-service/src/index.ts:61-67`) |
+| realtime | `tether_realtime_login` | **direct connection or session pooler**: `LISTEN` does not survive transaction pooling. Realtime uses this one DSN for its query pool as well as `LISTEN` (pool `services/realtime-service/src/index.ts:61-67`, listener `:85-88`) |
 
 DSN shapes (ROLES.md:208-217), placeholders only:
 - Eight services, transaction pooler: `postgres://tether_<service>_login.<project-ref>:<password>@<pooler-host>:6543/postgres?sslmode=require`
@@ -266,6 +266,7 @@ Rules from ROLES.md, cited, not restated in full:
 - After cutover, **rotate the superuser password**: it sat in a shared env group (lines 237-239).
 - Role rotation (lines 241-252).
 - **Never paste the superuser or `postgres` DSN into any service** (R-032).
+- **Never turn TLS verification off.** The installed driver treats `sslmode=require` as full verification against Node's default CA store (`node_modules/pg-connection-string/index.js`, v2.14.0, per th-security, Observed). Whether the Supabase pooler certificate chains to a public CA is **Unknown**. If services fail TLS at boot, do **not** use `NODE_TLS_REJECT_UNAUTHORIZED=0`, `sslmode=no-verify` or `uselibpqcompat=true`. Supply the Supabase CA through `sslrootcert` (owner decision), or stop.
 
 Under BE-001, `render.yaml` moves `DATABASE_URL` onto each service (ROLES.md:221-225). That change is BE-001's and is not made here.
 
@@ -312,10 +313,10 @@ Until D-5 is decided: **do not merge to Backend `main`** while any Render servic
 **Settings until OPS-023 and TH-104 say go (D-6):**
 1. Do not create the `deploy` branch.
 2. Keep "Deploy to production" disabled in the integration settings. The owner confirms this read-only in the dashboard and records the date.
-3. Do not merge migration-bearing commits to Backend `main` while the integration might track `main`.
+3. Do not merge **any** commit to Backend `main`, **including this runbook**, while the integration might track `main` or "Deploy to production" is enabled. `main` already holds 8 unapplied migrations, and the next merge of any kind could apply them (BASELINE.md:100-101; OPS-021 plan R-6). (Inferred.)
 4. Undoing the first-apply steps (S5, S6) is covered in the OPS-021 plan, §8: delete the branch or disable "Deploy to production" **before** S6.
 
-**Go criteria:** OPS-023 records the owner's schema go, TH-104 records the client cutover go, G-1 is cleared, and D-1 to D-6 are filled in.
+**Go criteria:** OPS-023 records the owner's schema go, TH-104 records the client cutover go, G-1 is cleared, D-1 to D-6 are filled in, and the owner has confirmed in the dashboard (read-only, dated) which repository and branch the integration tracks and that "Deploy to production" is off.
 
 ---
 
@@ -325,7 +326,7 @@ Until D-5 is decided: **do not merge to Backend `main`** while any Render servic
 
 1. Roll the affected service back to its previous successful deploy from the dashboard (**Inferred** capability, not checked).
 2. If the bad change is in a shared env group (for example `JWT_ALGORITHM` or `JWT_ISSUER`), revert the group value. **Every service** reads it, so redeploy or restart all ten.
-3. A signing-key mistake: put back the previous key pair on `tether-auth` (from the D-3 custody location) and redeploy `tether-auth`. Clients re-authenticate (§3.3).
+3. A signing-key mistake: put back the previous key pair on `tether-auth` (from the D-3 custody location) and redeploy `tether-auth`. Clients re-authenticate (§3.3). **Never restore a key that was retired for suspected compromise** (§3.3 step 3). Generate a new pair instead. How long a retired private key is kept before it is destroyed is part of D-3.
 4. **Code and DSN move together** (§5). Rolling code back across the BE-001 boundary also means rolling back each `DATABASE_URL`.
 5. Mobile clients keep using NestJS until TH-104 flips them, so a Backend rollback before TH-104 has no user effect (Inferred from office `backlog/TH-104.md:24,26`: the default stays `nest`, and the target is a build-time flag).
 
