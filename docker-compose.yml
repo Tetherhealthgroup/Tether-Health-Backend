@@ -257,8 +257,9 @@ services:
       SUPABASE_JWT_ALGORITHM: ${SUPABASE_JWT_ALGORITHM:-ES256}
       # Downstream: the keypair for Tether's own access tokens. Passed through
       # from the developer's shell or an untracked env file, never given a
-      # default here: a placeholder PEM would pass the boot-time shape check and
-      # then fail on first signature, and a real one must not live in this file.
+      # default here: no placeholder can pass the key import the signer does at
+      # boot (auth-service index.ts:53), and a real key must not live in this
+      # file.
       ACCESS_TOKEN_PRIVATE_KEY: ${ACCESS_TOKEN_PRIVATE_KEY}
       ACCESS_TOKEN_PUBLIC_KEY: ${ACCESS_TOKEN_PUBLIC_KEY}
       # Optional in the schema, and an empty string is NOT "absent" to it
