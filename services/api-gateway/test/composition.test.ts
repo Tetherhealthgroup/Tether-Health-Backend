@@ -297,7 +297,7 @@ const OTHER_DOCUMENTED: readonly Documented[] = [
   {
     method: "GET",
     path: "/api/v1/auth/.well-known/jwks.json",
-    source: "api-gateway/test/routes.test.ts:48",
+    source: "api-gateway/test/routes.test.ts:49",
   },
   {
     method: "GET",
@@ -349,18 +349,20 @@ const OTHER_DOCUMENTED: readonly Documented[] = [
     path: "/api/v1/chronic/medications",
     source: "chronic-service/src/index.ts:299",
   },
-  // Documented as "the website form's only endpoint" (api-gateway/test/routes.test.ts:63)
-  // and the waitlist is the website service's one job (ARCHITECTURE.md:58).
-  // Currently unreachable on purpose: see KNOWN_UNREACHABLE.
+  // website-service serves `POST /waitlist` (website-service/src/index.ts:126),
+  // and the waitlist is its one job (ARCHITECTURE.md:58). realtime-service
+  // serves `GET /stream` (realtime-service/src/index.ts:126). Both prefixes are in
+  // `DEFERRED_ROUTES` (src/routes.ts:97-98), so these are unreachable on
+  // purpose: see KNOWN_UNREACHABLE.
   {
     method: "POST",
     path: "/api/v1/waitlist",
-    source: "api-gateway/test/routes.test.ts:63",
+    source: "website-service/src/index.ts:126",
   },
   {
     method: "GET",
     path: "/api/v1/stream",
-    source: "api-gateway/src/routes.ts:65 (realtime-service entry)",
+    source: "realtime-service/src/index.ts:126",
   },
 ];
 
@@ -627,14 +629,16 @@ void test("the doubled service prefix of every routed service does not reach a h
           matched.service === "enrolment-service" &&
           method === "PATCH" &&
           /^\/enrolments\/[^/?]+\/?(\?.*)?$/.test(forwarded);
-        if (hit && !isAreaParameter) reached.push(`${method} ${path} -> ${matched.service} as ${forwarded}`);
+        if (hit && !isAreaParameter) {
+          reached.push(`${method} ${path} -> ${matched.service} as ${forwarded}`);
+        }
       }
     }
   }
   assert.deepEqual(reached, [], "a doubled prefix reaches a service handler");
 });
 
-void test("the enrolment paths that work still work and the doubled one does not", async () => {
+void test("the enrolment prefix is still routed and its doubled form reaches no handler", async () => {
   const enrolment = SERVICE_APPS["enrolment-service"];
   assert.ok(enrolment);
   const forwardedOf = (path: string): string => {
@@ -667,7 +671,12 @@ void test("DEFERRED_PREFIXES here and DEFERRED_ROUTES in src/routes.ts agree, an
   );
   for (const deferred of DEFERRED_ROUTES) {
     assert.equal(
-      ROUTES.some((route) => route.prefix === deferred.prefix || route.service === deferred.service || route.urlKey === deferred.urlKey),
+      ROUTES.some(
+        (route) =>
+          route.prefix === deferred.prefix ||
+          route.service === deferred.service ||
+          route.urlKey === deferred.urlKey,
+      ),
       false,
       `${deferred.prefix} is both routed and deferred`,
     );
