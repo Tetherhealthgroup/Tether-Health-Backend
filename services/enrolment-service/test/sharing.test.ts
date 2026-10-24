@@ -29,12 +29,12 @@ function issuePaths(result: { success: boolean; error?: { issues: { path: Proper
   return (result.error?.issues ?? []).map((issue) => issue.path.join('.'));
 }
 
-test('a per-programme grant naming its wording is accepted', () => {
+void test('a per-programme grant naming its wording is accepted', () => {
   const result = SharingRequestSchema.safeParse(VALID_GRANT);
   assert.equal(result.success, true, JSON.stringify(issuePaths(result)));
 });
 
-test('a revocation needs no wording', () => {
+void test('a revocation needs no wording', () => {
   const result = SharingRequestSchema.safeParse({
     granted: false,
     scope: 'notes',
@@ -43,7 +43,7 @@ test('a revocation needs no wording', () => {
   assert.equal(result.success, true, JSON.stringify(issuePaths(result)));
 });
 
-test('a grant that does not carry the wording is refused', () => {
+void test('a grant that does not carry the wording is refused', () => {
   const { consentText, ...withoutWording } = VALID_GRANT;
   void consentText;
 
@@ -52,7 +52,7 @@ test('a grant that does not carry the wording is refused', () => {
   assert.ok(issuePaths(result).includes('consentText'));
 });
 
-test('a body naming an account rather than a programme is refused, with the rule quoted', () => {
+void test('a body naming an account rather than a programme is refused, with the rule quoted', () => {
   for (const key of [
     'accountId',
     'account_id',
@@ -84,7 +84,7 @@ test('a body naming an account rather than a programme is refused, with the rule
   }
 });
 
-test('a wildcard recipient is refused — null already means "any of this kind"', () => {
+void test('a wildcard recipient is refused — null already means "any of this kind"', () => {
   for (const recipientId of ['*', 'all', 'ANY', ' everyone ']) {
     const result = SharingRequestSchema.safeParse({ ...VALID_GRANT, recipientId });
     assert.equal(result.success, false, `\`${recipientId}\` was accepted`);
@@ -92,7 +92,7 @@ test('a wildcard recipient is refused — null already means "any of this kind"'
   }
 });
 
-test('a named recipient of a known kind is fine', () => {
+void test('a named recipient of a known kind is fine', () => {
   const result = SharingRequestSchema.safeParse({
     ...VALID_GRANT,
     recipientId: '33333333-3333-4333-8333-333333333333',
@@ -100,7 +100,7 @@ test('a named recipient of a known kind is fine', () => {
   assert.equal(result.success, true, JSON.stringify(issuePaths(result)));
 });
 
-test('R-063: a recipient that is not a lowercase account id is refused, so no name or email is stored', () => {
+void test('R-063: a recipient that is not a lowercase account id is refused, so no name or email is stored', () => {
   for (const recipientId of [
     'coach-4417',
     'someone@example.invalid',
@@ -118,7 +118,7 @@ test('R-063: a recipient that is not a lowercase account id is refused, so no na
   }
 });
 
-test('scope and recipientKind are closed sets', () => {
+void test('scope and recipientKind are closed sets', () => {
   // `scope: 'all'` and `recipientKind: 'everyone'` are the other two shapes a
   // global grant arrives in. The enums refuse both without any extra code.
   assert.equal(
@@ -132,7 +132,7 @@ test('scope and recipientKind are closed sets', () => {
   );
 });
 
-test('an unknown field is refused rather than ignored', () => {
+void test('an unknown field is refused rather than ignored', () => {
   const result = SharingRequestSchema.safeParse({
     ...VALID_GRANT,
     expiresInDays: 30,

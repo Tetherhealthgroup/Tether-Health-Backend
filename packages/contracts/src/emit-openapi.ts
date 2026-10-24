@@ -454,6 +454,10 @@ export function components(): Record<string, unknown> {
   const schemas: Record<string, unknown> = {};
 
   for (const [name, schema] of Object.entries(REGISTRY)) {
+    // zod-to-json-schema's parameter is `ZodType<any, ...>`; the registry's
+    // `ZodTypeAny` is the same type spelled out, so the rule fires on a library
+    // signature rather than on an unsafe value.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
     const generated = zodToJsonSchema(schema, {
       name,
       $refStrategy: 'root',

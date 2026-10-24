@@ -123,16 +123,17 @@ export function createApp(options: AppOptions): Express {
  * that trusted a header the gateway set would be one network mistake away from
  * trusting anyone who could reach it directly.
  */
-export function requireAuth(verifier: Verifier) {
-  return async (req: Request, _res: Response, next: NextFunction) => {
-    try {
+export function requireAuth(
+  verifier: Verifier,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, _res, next) => {
+    const authenticate = async (): Promise<void> => {
       const token = bearerToken(req.header('authorization'));
       if (!token) throw problem.unauthenticated('No bearer token.');
       req.principal = await verifier(token);
       next();
-    } catch (error) {
-      next(error);
-    }
+    };
+    authenticate().catch(next);
   };
 }
 

@@ -57,7 +57,7 @@ const consentEvent = (
 ): ChangeNotification =>
   event({ enrolmentId, table: 'programme.sharing_consent', op, revoked });
 
-test('a notification carries no row data', () => {
+void test('a notification carries no row data', () => {
   // The security property the whole design rests on. If a payload ever grows a
   // value column, a stream becomes a read path with no consent check in it.
   const parsed = changeNotification.parse({
@@ -75,25 +75,25 @@ test('a notification carries no row data', () => {
   ]);
 });
 
-test('a subscriber hears about its own enrolments', () => {
+void test('a subscriber hears about its own enrolments', () => {
   assert.equal(shouldDeliver(subscriber({ owned: [MINE] }), event()), true);
 });
 
-test('a subscriber hears nothing about anyone else', () => {
+void test('a subscriber hears nothing about anyone else', () => {
   assert.equal(
     shouldDeliver(subscriber({ owned: [MINE] }), event({ enrolmentId: THEIRS })),
     false,
   );
 });
 
-test('a recipient hears record changes on an enrolment shared with them', () => {
+void test('a recipient hears record changes on an enrolment shared with them', () => {
   assert.equal(
     shouldDeliver(subscriber({ shared: [SHARED] }), event({ enrolmentId: SHARED })),
     true,
   );
 });
 
-test('R-033: a revocation on someone else\'s enrolment is not broadcast to a stranger', () => {
+void test('R-033: a revocation on someone else\'s enrolment is not broadcast to a stranger', () => {
   // The defect. `shouldDeliver` used to return true for any revocation, for any
   // enrolment, to any subscriber, so every connected client learned of every
   // withdrawal of consent on the platform.
@@ -104,7 +104,7 @@ test('R-033: a revocation on someone else\'s enrolment is not broadcast to a str
   assert.equal(shouldDeliver(subscriber(), revocation), false);
 });
 
-test('a recipient is never handed a consent event synchronously; dispatch settles it', () => {
+void test('a recipient is never handed a consent event synchronously; dispatch settles it', () => {
   // The payload does not say whose consent was revoked (R-063), so whether the
   // event is the recipient's is a database read, and that is dispatch's job.
   const clinician = subscriber({ shared: [SHARED] });
@@ -112,14 +112,14 @@ test('a recipient is never handed a consent event synchronously; dispatch settle
   assert.equal(shouldDeliver(clinician, consentEvent(SHARED, 'update', true)), false);
 });
 
-test('a revocation reaches the owner of the enrolment', () => {
+void test('a revocation reaches the owner of the enrolment', () => {
   assert.equal(
     shouldDeliver(subscriber({ owned: [MINE] }), consentEvent(MINE, 'update', true)),
     true,
   );
 });
 
-test('a consent grant is the owner\'s alone — a co-recipient does not hear it', () => {
+void test('a consent grant is the owner\'s alone — a co-recipient does not hear it', () => {
   // Learning that somebody else was just granted a share on an enrolment you
   // hold is itself a disclosure, so only a revocation (which ends *your* view)
   // is exempt for a recipient.
@@ -130,7 +130,7 @@ test('a consent grant is the owner\'s alone — a co-recipient does not hear it'
   assert.equal(shouldDeliver(subscriber({ owned: [MINE] }), grant), false);
 });
 
-test('fan-out delivers only to the entitled', () => {
+void test('fan-out delivers only to the entitled', () => {
   const mineSink: ChangeNotification[] = [];
   const theirsSink: ChangeNotification[] = [];
 
@@ -146,7 +146,7 @@ test('fan-out delivers only to the entitled', () => {
   assert.equal(theirsSink.length, 0);
 });
 
-test('fan-out of a revocation reaches the owner only; recipients are settled by dispatch', () => {
+void test('fan-out of a revocation reaches the owner only; recipients are settled by dispatch', () => {
   const owner: ChangeNotification[] = [];
   const recipientSink: ChangeNotification[] = [];
   const bystander: ChangeNotification[] = [];
@@ -168,7 +168,7 @@ test('fan-out of a revocation reaches the owner only; recipients are settled by 
   assert.equal(unrelated.length, 0);
 });
 
-test('after a revocation is delivered, the recipient hears nothing more about that enrolment', async () => {
+void test('after a revocation is delivered, the recipient hears nothing more about that enrolment', async () => {
   const sink: ChangeNotification[] = [];
   const clinician = subscriber({ shared: [SHARED], sink });
   const none = async () => false;
@@ -184,7 +184,7 @@ test('after a revocation is delivered, the recipient hears nothing more about th
   assert.equal(sink.length, 2, 'later changes to a withdrawn record are not');
 });
 
-test('a revocation does not strip an owner of their own enrolment', async () => {
+void test('a revocation does not strip an owner of their own enrolment', async () => {
   const sink: ChangeNotification[] = [];
   const owner = subscriber({ owned: [MINE], sink });
 
@@ -198,7 +198,7 @@ function recipient(accountId: string, shared: string[], sink: ChangeNotification
   return { ...subscriber({ shared, sink }), accountId };
 }
 
-test('R-063: a revocation reaches the owner and the recipient whose consent ended, and not one whose consent is live', async () => {
+void test('R-063: a revocation reaches the owner and the recipient whose consent ended, and not one whose consent is live', async () => {
   const owner: ChangeNotification[] = [];
   const revoked: ChangeNotification[] = [];
   const other: ChangeNotification[] = [];
@@ -231,7 +231,7 @@ test('R-063: a revocation reaches the owner and the recipient whose consent ende
   assert.equal(other.length, 1, 'their stream carries on');
 });
 
-test('R-063: a recipient is held back before the lookup resolves, so nothing leaks while it runs', async () => {
+void test('R-063: a recipient is held back before the lookup resolves, so nothing leaks while it runs', async () => {
   const sink: ChangeNotification[] = [];
   const clinician = recipient('clinician-1', [SHARED], sink);
   let release: (value: boolean) => void = () => undefined;
@@ -255,7 +255,7 @@ test('R-063: a recipient is held back before the lookup resolves, so nothing lea
   assert.equal(sink.length, 0);
 });
 
-test('R-063: a failed lookup fails closed: the recipient is told and dropped', async () => {
+void test('R-063: a failed lookup fails closed: the recipient is told and dropped', async () => {
   const sink: ChangeNotification[] = [];
   const clinician = recipient('clinician-1', [SHARED], sink);
 
@@ -267,13 +267,13 @@ test('R-063: a failed lookup fails closed: the recipient is told and dropped', a
   assert.ok(!clinician.shared.has(SHARED));
 });
 
-test('R-063: a dead socket found while settling a revocation is reported', async () => {
+void test('R-063: a dead socket found while settling a revocation is reported', async () => {
   const gone = subscriber({ shared: [SHARED], alive: false });
   const dead = await dispatch([gone], consentEvent(SHARED, 'update', true), async () => false);
   assert.deepEqual(dead, [gone]);
 });
 
-test('R-063: grants and non-revocation changes never trigger a lookup', async () => {
+void test('R-063: grants and non-revocation changes never trigger a lookup', async () => {
   let asked = 0;
   const holds = async () => {
     asked += 1;
@@ -286,7 +286,7 @@ test('R-063: grants and non-revocation changes never trigger a lookup', async ()
   assert.ok(clinician.shared.has(SHARED));
 });
 
-test('R-063: the payload has no recipient field; one sent by an old trigger is dropped on parse', () => {
+void test('R-063: the payload has no recipient field; one sent by an old trigger is dropped on parse', () => {
   const parsed = changeNotification.parse({
     ...consentEvent(SHARED, 'update', true),
     recipientId: 'someone@example.invalid',
@@ -296,7 +296,7 @@ test('R-063: the payload has no recipient field; one sent by an old trigger is d
   assert.deepEqual(Object.keys(changeNotification.parse(event())).sort(), ['at', 'enrolmentId', 'op', 'table']);
 });
 
-test('fan-out reports sockets that have gone', () => {
+void test('fan-out reports sockets that have gone', () => {
   const dead = subscriber({ owned: [MINE], alive: false });
   const alive = subscriber({ owned: [MINE] });
 
@@ -305,7 +305,7 @@ test('fan-out reports sockets that have gone', () => {
   assert.deepEqual(gone, [dead]);
 });
 
-test('a payload that is not JSON, or not the contract, is dropped rather than thrown', () => {
+void test('a payload that is not JSON, or not the contract, is dropped rather than thrown', () => {
   assert.equal(parseNotification('{not json'), null);
   assert.equal(parseNotification('{"enrolmentId":"x"}'), null);
   assert.equal(parseNotification('null'), null);
@@ -314,7 +314,7 @@ test('a payload that is not JSON, or not the contract, is dropped rather than th
   assert.deepEqual(good, event());
 });
 
-test('an SSE frame is terminated', () => {
+void test('an SSE frame is terminated', () => {
   // A frame without the blank line is the classic reason a stream appears to
   // hang: the client holds it, waiting for an end that never comes.
   const frame = toSseFrame(event());
@@ -327,7 +327,7 @@ test('an SSE frame is terminated', () => {
   assert.deepEqual(JSON.parse(data ?? '{}'), event());
 });
 
-test('the frame is one line of data', () => {
+void test('the frame is one line of data', () => {
   // SSE splits on newlines, so an embedded one would truncate the event. The
   // payload is JSON with no raw newlines, which is what keeps that safe.
   const frame = toSseFrame(event());

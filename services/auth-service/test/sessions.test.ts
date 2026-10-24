@@ -53,7 +53,7 @@ function rotate(
 // Storage
 // ---------------------------------------------------------------------------
 
-test('the plaintext refresh token is never stored', async () => {
+void test('the plaintext refresh token is never stored', async () => {
   const store = createMemoryStore();
   const issued = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -67,7 +67,7 @@ test('the plaintext refresh token is never stored', async () => {
   assert.match(store.rows()[0]!.tokenHash, /^[0-9a-f]{64}$/);
 });
 
-test('minted tokens are distinct and hash stably', () => {
+void test('minted tokens are distinct and hash stably', () => {
   const seen = new Set<string>();
   for (let i = 0; i < 1_000; i += 1) {
     const { token, hash } = mintRefreshToken();
@@ -77,7 +77,7 @@ test('minted tokens are distinct and hash stably', () => {
   }
 });
 
-test('a sign-in opens exactly one live session in a new family', async () => {
+void test('a sign-in opens exactly one live session in a new family', async () => {
   const store = createMemoryStore();
   const first = await signIn(store, at('2026-01-01T00:00:00Z'));
   const second = await signIn(store, at('2026-01-01T00:05:00Z'));
@@ -92,7 +92,7 @@ test('a sign-in opens exactly one live session in a new family', async () => {
 // Rotation
 // ---------------------------------------------------------------------------
 
-test('using a refresh token issues a new one and revokes the old', async () => {
+void test('using a refresh token issues a new one and revokes the old', async () => {
   const store = createMemoryStore();
   const first = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -118,7 +118,7 @@ test('using a refresh token issues a new one and revokes the old', async () => {
   assert.deepEqual(fresh?.expiresAt, at('2026-02-01T00:00:00Z'));
 });
 
-test('rotation chains, and only the newest token is live', async () => {
+void test('rotation chains, and only the newest token is live', async () => {
   const store = createMemoryStore();
   let current = (await signIn(store, at('2026-01-01T00:00:00Z'))).token;
 
@@ -139,7 +139,7 @@ test('rotation chains, and only the newest token is live', async () => {
 // Family reuse detection — the reason the family_id column exists
 // ---------------------------------------------------------------------------
 
-test('presenting an already-rotated token revokes the entire family', async () => {
+void test('presenting an already-rotated token revokes the entire family', async () => {
   const store = createMemoryStore();
   const stolen = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -172,7 +172,7 @@ test('presenting an already-rotated token revokes the entire family', async () =
   );
 });
 
-test('the successor stops working the moment reuse is detected', async () => {
+void test('the successor stops working the moment reuse is detected', async () => {
   const store = createMemoryStore();
   const stolen = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -191,7 +191,7 @@ test('the successor stops working the moment reuse is detected', async () => {
   assert.equal(afterwards.sessionsRevoked, 0, 'nothing was left to revoke');
 });
 
-test('reuse detection does not reach beyond the compromised family', async () => {
+void test('reuse detection does not reach beyond the compromised family', async () => {
   const store = createMemoryStore();
 
   const phone = await signIn(store, at('2026-01-01T00:00:00Z'));
@@ -210,7 +210,7 @@ test('reuse detection does not reach beyond the compromised family', async () =>
   assert.equal(store.find(hashRefreshToken(stranger.token))?.revokedAt, null);
 });
 
-test('reuse detection returns an outcome rather than throwing', async () => {
+void test('reuse detection returns an outcome rather than throwing', async () => {
   const store = createMemoryStore();
   const stolen = await signIn(store, at('2026-01-01T00:00:00Z'));
   await rotate(store, stolen.token, at('2026-01-02T00:00:00Z'));
@@ -228,7 +228,7 @@ test('reuse detection returns an outcome rather than throwing', async () => {
 // The other refusals
 // ---------------------------------------------------------------------------
 
-test('an unrecognised token revokes nothing', async () => {
+void test('an unrecognised token revokes nothing', async () => {
   const store = createMemoryStore();
   const live = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -240,7 +240,7 @@ test('an unrecognised token revokes nothing', async () => {
   assert.equal(store.find(hashRefreshToken(live.token))?.revokedAt, null);
 });
 
-test('an expired token is refused and marked, but does not kill the family', async () => {
+void test('an expired token is refused and marked, but does not kill the family', async () => {
   const store = createMemoryStore();
   const issued = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -255,7 +255,7 @@ test('an expired token is refused and marked, but does not kill the family', asy
   assert.notEqual(row?.revokedReason, 'reuse-detected');
 });
 
-test('a token presented on its expiry instant is expired, not rotated', async () => {
+void test('a token presented on its expiry instant is expired, not rotated', async () => {
   const store = createMemoryStore();
   const issued = await signIn(store, at('2026-01-01T00:00:00Z'));
 
@@ -268,7 +268,7 @@ test('a token presented on its expiry instant is expired, not rotated', async ()
 // Sign-out
 // ---------------------------------------------------------------------------
 
-test('signing out ends the family and leaves other devices alone', async () => {
+void test('signing out ends the family and leaves other devices alone', async () => {
   const store = createMemoryStore();
   const phone = await signIn(store, at('2026-01-01T00:00:00Z'));
   const tablet = await signIn(store, at('2026-01-01T00:01:00Z'));
@@ -280,7 +280,7 @@ test('signing out ends the family and leaves other devices alone', async () => {
   assert.equal(store.find(hashRefreshToken(tablet.token))?.revokedAt, null);
 });
 
-test('a signed-out token cannot be rotated, and reads as reuse', async () => {
+void test('a signed-out token cannot be rotated, and reads as reuse', async () => {
   const store = createMemoryStore();
   const issued = await signIn(store, at('2026-01-01T00:00:00Z'));
   await signOutFamily(store, issued.session.familyId, at('2026-01-02T00:00:00Z'));

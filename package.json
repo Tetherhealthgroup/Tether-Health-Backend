@@ -19,7 +19,7 @@
     "format": "prettier --check .",
     "test": "node --test --experimental-strip-types \"db/test/**/*.test.ts\" \"packages/*/test/**/*.test.ts\" \"services/*/test/**/*.test.ts\"",
     "db:migrate": "supabase db push",
-    "db:seed": "node --experimental-strip-types db/seed.ts",
+    "db:seed": "node --experimental-strip-types db/seeds/catalogue.ts",
     "openapi": "node --experimental-strip-types packages/contracts/src/emit-openapi.ts",
     "dev": "docker compose up --build",
     "check": "npm run typecheck && npm run lint && npm run test",

@@ -33,16 +33,14 @@ const configSchema = z.object({
   /**
    * Where the bundle lives.
    *
-   * Defaults to the checkout this backend was written against, because that is
-   * where the only copy of the bundle is — it is a Flutter asset directory, not
-   * a published package. Configurable because a checkout path is not a
-   * deployment strategy: CI clones the app repo somewhere else, and an operator
-   * running this against a staging database should not have to reproduce one
-   * engineer's home directory.
+   * Required, with no default. The bundle is a Flutter asset directory, not a
+   * published package, and a default pointing at one engineer's home directory
+   * is not a deployment strategy. Set it to the `assets/design` directory of
+   * the app repo checkout.
    */
   CATALOGUE_SOURCE_DIR: z
-    .string()
-    .default('/Users/spatchava/Tetherhealthgroup/Tether-Health/assets/design'),
+    .string({ required_error: 'CATALOGUE_SOURCE_DIR is required: the path to the Flutter repo\'s assets/design directory.' })
+    .min(1, 'CATALOGUE_SOURCE_DIR must not be empty.'),
 
   LOG_LEVEL: z.string().default('info'),
 });

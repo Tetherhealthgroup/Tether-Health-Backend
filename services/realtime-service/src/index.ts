@@ -215,9 +215,9 @@ await startRealtime({
       serviceName: config.SERVICE_NAME,
       logger,
       onShutdown: async () => {
-        // Close the streams before the pool: a subscriber mid-write against a
-        // closed pool would throw on the way out of the process.
-        for (const subscriber of subscribers) subscriber.send.length;
+        // Forget the subscribers. This does not close their streams: `Subscriber`
+        // has no close hook, so open SSE responses are left to the process exit.
+        // (A `subscriber.send.length` statement used to sit here and did nothing.)
         subscribers.clear();
         await listener.end().catch(() => undefined);
         await db.close();

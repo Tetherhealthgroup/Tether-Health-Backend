@@ -34,7 +34,7 @@ const BEHAVIORAL: ActiveProgramme = {
   joinedOn: '2026-06-18T09:00:00.000Z',
 };
 
-test('two active programmes refuse a third, and name the longest-running one', () => {
+void test('two active programmes refuse a third, and name the longest-running one', () => {
   const check = checkCeiling({
     active: [BEHAVIORAL, TOBACCO],
     areaId: 'digital',
@@ -57,7 +57,7 @@ test('two active programmes refuse a third, and name the longest-running one', (
   assert.equal(refusal.toBody().wouldPause, 'tobacco');
 });
 
-test('naming a programme to pause makes room in the same request', () => {
+void test('naming a programme to pause makes room in the same request', () => {
   const check = checkCeiling({
     active: [TOBACCO, BEHAVIORAL],
     areaId: 'digital',
@@ -73,7 +73,7 @@ test('naming a programme to pause makes room in the same request', () => {
   );
 });
 
-test('re-joining a programme that is already active is not a third programme', () => {
+void test('re-joining a programme that is already active is not a third programme', () => {
   const check = checkCeiling({
     active: [TOBACCO, BEHAVIORAL],
     areaId: 'tobacco',
@@ -85,18 +85,18 @@ test('re-joining a programme that is already active is not a third programme', (
   assert.equal(check.refused, false);
 });
 
-test('one active programme leaves room for another', () => {
+void test('one active programme leaves room for another', () => {
   const check = checkCeiling({ active: [TOBACCO], areaId: 'digital', ceiling: 2 });
   assert.equal(check.refused, false);
   assert.equal(check.wouldPause, null);
 });
 
-test('longestRunning is empty-safe', () => {
+void test('longestRunning is empty-safe', () => {
   assert.equal(longestRunning([]), null);
   assert.equal(longestRunning([BEHAVIORAL]), 'behavioral');
 });
 
-test('the ceiling is read from the shell rule, and falls back exactly as the trigger does', () => {
+void test('the ceiling is read from the shell rule, and falls back exactly as the trigger does', () => {
   assert.equal(ceilingFromRule('At most 3 programs may be active at once.'), 3);
 
   // The rule as shipped spells the number in words, so `substring(rule from
@@ -137,7 +137,7 @@ function ordinaryCheckViolation(): Error & Record<string, unknown> {
   return error;
 }
 
-test('the trigger violation is recognised; an ordinary check violation is not', () => {
+void test('the trigger violation is recognised; an ordinary check violation is not', () => {
   assert.equal(isActiveCeilingViolation(triggerViolation()), true);
 
   // Both are SQLSTATE 23514. Matching on the code alone would turn a malformed
@@ -148,7 +148,7 @@ test('the trigger violation is recognised; an ordinary check violation is not', 
   assert.equal(isActiveCeilingViolation(null), false);
 });
 
-test('a deferred trigger violation at COMMIT becomes the ceiling problem, not a 500', async () => {
+void test('a deferred trigger violation at COMMIT becomes the ceiling problem, not a 500', async () => {
   const hint = { wouldPause: 'tobacco' };
 
   await assert.rejects(
@@ -170,7 +170,7 @@ test('a deferred trigger violation at COMMIT becomes the ceiling problem, not a 
   );
 });
 
-test('anything that is not the ceiling trigger is rethrown untouched', async () => {
+void test('anything that is not the ceiling trigger is rethrown untouched', async () => {
   const original = ordinaryCheckViolation();
 
   await assert.rejects(
@@ -186,7 +186,7 @@ test('anything that is not the ceiling trigger is rethrown untouched', async () 
   );
 });
 
-test('a successful call passes its value through', async () => {
+void test('a successful call passes its value through', async () => {
   const value = await withCeilingTranslation({ wouldPause: null }, async () => 'joined');
   assert.equal(value, 'joined');
 });

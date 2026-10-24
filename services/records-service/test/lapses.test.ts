@@ -18,7 +18,7 @@ const lapse = (at: string, severity = 'one cigarette') => ({
   context: ['stress'],
 });
 
-test('recording a lapse never lowers anything derived from history', async (t) => {
+void test('recording a lapse never lowers anything derived from history', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -52,7 +52,7 @@ test('recording a lapse never lowers anything derived from history', async (t) =
   assert.equal(afterTwo.body.history.lastAt, '2026-05-02T10:00:00.000Z');
 });
 
-test('no response about a lapse carries a streak, score or progress value', async (t) => {
+void test('no response about a lapse carries a streak, score or progress value', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -70,7 +70,7 @@ test('no response about a lapse carries a streak, score or progress value', asyn
   assert.doesNotMatch(JSON.stringify(listed.body), forbidden);
 });
 
-test('lapses are append-only: there is no route that edits or removes one', async (t) => {
+void test('lapses are append-only: there is no route that edits or removes one', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -96,7 +96,7 @@ test('lapses are append-only: there is no route that edits or removes one', asyn
   assert.equal(harness.world.lapses.length, 1);
 });
 
-test('a retried POST is the same event, not a second one', async (t) => {
+void test('a retried POST is the same event, not a second one', async (t) => {
   // A dropped response and a dropped request look identical to the client, so a
   // retried POST and a re-sent sync item are the same thing arriving twice and
   // must behave the same way. Duplicating a lapse would put an event in a
@@ -126,7 +126,7 @@ test('a retried POST is the same event, not a second one', async (t) => {
   assert.equal(harness.world.lapses.length, 1);
 });
 
-test('the audit row for a lapse carries no severity and no context', async (t) => {
+void test('the audit row for a lapse carries no severity and no context', async (t) => {
   // `ops.audit_event` has no update and no delete path. What goes in it is
   // chosen rather than filtered, and the record must not be duplicated into a
   // table nothing can ever redact.
@@ -147,7 +147,7 @@ test('the audit row for a lapse carries no severity and no context', async (t) =
   assert.deepEqual(event.detail, { areaId: 'tobacco', created: true });
 });
 
-test('an observation keeps its provenance and is never presented as measured', async (t) => {
+void test('an observation keeps its provenance and is never presented as measured', async (t) => {
   // `self_report_only`: "Ratings describe how someone felt. The product is
   // explicit that these are self-reports."
   const harness = await startHarness();
@@ -174,7 +174,7 @@ test('an observation keeps its provenance and is never presented as measured', a
   assert.equal(listed.body.observations[0].platform, 'ios');
 });
 
-test('an observation with no stated source is refused', async (t) => {
+void test('an observation with no stated source is refused', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');

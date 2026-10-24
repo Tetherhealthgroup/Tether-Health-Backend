@@ -442,38 +442,11 @@ services:
       start_period: 20s
 
   # -------------------------------------------------------------------------
-  # Migrations — opt-in, and never part of `up`
+  # Migrations are not a compose service
   # -------------------------------------------------------------------------
-
-  # Run explicitly:
-  #
-  #     docker compose --profile migrate run --rm db-migrate
-  #
-  # The `profiles` key is what keeps it out of `docker compose up`. Applying
-  # migrations has to be something somebody does, not something that happens:
-  # the model repo's pipeline ran them on every push to main with no gate, and
-  # a schema change reached production before anybody had read it.
-  #
-  # It borrows website-service's image rather than having one of its own,
-  # because that image already contains the workspace, `pg`, and a copy of
-  # `db/`. A dedicated Dockerfile under `db/` would be tidier and belongs to
-  # whoever owns that directory.
-  db-migrate:
-    profiles: ['migrate']
-    build:
-      context: .
-      dockerfile: services/website-service/Dockerfile
-    networks: [tether]
-    environment:
-      # The migration role needs DDL rights, which no service role has. Falls
-      # back to the superuser DSN for a local database, where they are the same
-      # thing and nobody is served by a second password.
-      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgres://${POSTGRES_USER:-tether}:${POSTGRES_PASSWORD:-tether_local_only}@postgres:5432/${POSTGRES_DB:-tether}}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: 'no'
-    command: ['node', '--experimental-strip-types', 'db/migrate.ts']
+  # They live in `supabase/migrations/` and are applied by the CLI against its
+  # own local stack: `npm run db:reset`. The `db-migrate` service that used to
+  # sit here ran a runner script that no longer exists.
 
 networks:
   tether:

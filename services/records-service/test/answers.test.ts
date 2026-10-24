@@ -11,7 +11,7 @@ import { startHarness } from './support/harness.ts';
  * it; these tests are the backend refusing to reintroduce it.
  */
 
-test('two programmes sharing a screen id keep separate records', async (t) => {
+void test('two programmes sharing a screen id keep separate records', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'behavioral');
@@ -32,7 +32,7 @@ test('two programmes sharing a screen id keep separate records', async (t) => {
   assert.equal(harness.world.answers.length, 2, 'two rows, not one merged row');
 });
 
-test('an answer is returned in the shape the app encodes', async (t) => {
+void test('an answer is returned in the shape the app encodes', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -56,7 +56,7 @@ test('an answer is returned in the shape the app encodes', async (t) => {
   });
 });
 
-test('PUT replaces the screen rather than accumulating blocks', async (t) => {
+void test('PUT replaces the screen rather than accumulating blocks', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -73,7 +73,7 @@ test('PUT replaces the screen rather than accumulating blocks', async (t) => {
   assert.equal(harness.world.answers.length, 1);
 });
 
-test('one block cannot be two kinds at once', async (t) => {
+void test('one block cannot be two kinds at once', async (t) => {
   // `record.screen_answer` is unique on `(enrolment_id, screen_id, block_index)`,
   // so this body describes two rows that cannot both exist. Keeping whichever
   // came last would make the stored record depend on JSON key order.
@@ -90,7 +90,7 @@ test('one block cannot be two kinds at once', async (t) => {
   assert.equal(harness.world.answers.length, 0);
 });
 
-test('an unknown block kind is refused rather than dropped', async (t) => {
+void test('an unknown block kind is refused rather than dropped', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -102,7 +102,7 @@ test('an unknown block kind is refused rather than dropped', async (t) => {
   assert.equal(response.status, 400);
 });
 
-test('an area the caller has not joined is a 404, not a 403', async (t) => {
+void test('an area the caller has not joined is a 404, not a 403', async (t) => {
   // `errors.ts`: not-found covers "the caller may not know that it does".
   // Whether somebody else is enrolled in an area is not this caller's business.
   const harness = await startHarness();
@@ -113,7 +113,7 @@ test('an area the caller has not joined is a 404, not a 403', async (t) => {
   assert.equal(response.status, 404);
 });
 
-test('an unauthenticated request never reaches the record', async (t) => {
+void test('an unauthenticated request never reaches the record', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
 

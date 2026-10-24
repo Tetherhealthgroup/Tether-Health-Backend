@@ -47,10 +47,10 @@ interface AreaRow {
   position: number;
 }
 
-interface ServiceLineRow extends ServiceLine {}
-interface MeasureRow extends Measure {}
-interface SafeguardRow extends Safeguard {}
-interface ShellRuleRow extends ShellRule {}
+type ServiceLineRow = ServiceLine;
+type MeasureRow = Measure;
+type SafeguardRow = Safeguard;
+type ShellRuleRow = ShellRule;
 
 interface AreaSafeguardRow {
   areaId: string;
@@ -80,7 +80,7 @@ interface ProductRow {
   nameNote: string | null;
 }
 
-interface ProductScreenRow extends ProductScreen {}
+type ProductScreenRow = ProductScreen;
 
 interface ScreenContentRow {
   productId: string;

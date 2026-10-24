@@ -29,7 +29,7 @@ const batch = (idempotencyKey = KEY) => ({
   ],
 });
 
-test('the same batch sent twice produces one set of rows', async (t) => {
+void test('the same batch sent twice produces one set of rows', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -62,7 +62,7 @@ test('the same batch sent twice produces one set of rows', async (t) => {
   assert.equal(syncEvents.length, 1);
 });
 
-test('a fresh key over the same content still writes nothing new', async (t) => {
+void test('a fresh key over the same content still writes nothing new', async (t) => {
   // The batch receipt cannot help here — this is the reinstall / cleared-queue
   // case, where the client has genuinely forgotten the key. Per-item identity
   // is what has to hold.
@@ -86,7 +86,7 @@ test('a fresh key over the same content still writes nothing new', async (t) => 
   assert.equal(harness.world.answers.length, 2, 'answers upsert onto themselves');
 });
 
-test('a batch with no idempotency key is refused', async (t) => {
+void test('a batch with no idempotency key is refused', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -99,7 +99,7 @@ test('a batch with no idempotency key is refused', async (t) => {
   assert.equal(harness.world.lapses.length, 0);
 });
 
-test('the key may travel in the Idempotency-Key header', async (t) => {
+void test('the key may travel in the Idempotency-Key header', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -115,7 +115,7 @@ test('the key may travel in the Idempotency-Key header', async (t) => {
   assert.equal(harness.world.lapses.length, 1);
 });
 
-test('a version 1 document is refused rather than migrated', async (t) => {
+void test('a version 1 document is refused rather than migrated', async (t) => {
   // The app takes exactly this position in `restoreFrom`, and for the reason
   // that matters here: a v1 answer key names a screen and no programme, and
   // `behavioral` and `digital` share every screen id, so attributing it means
@@ -133,7 +133,7 @@ test('a version 1 document is refused rather than migrated', async (t) => {
   assert.equal(harness.world.answers.length, 0);
 });
 
-test('an answer key naming no programme is reported, not filed somewhere', async (t) => {
+void test('an answer key naming no programme is reported, not filed somewhere', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -149,7 +149,7 @@ test('an answer key naming no programme is reported, not filed somewhere', async
   assert.match(response.body.rejected[0].reason, /names no programme/);
 });
 
-test('sync cannot reach a programme the caller is not enrolled in', async (t) => {
+void test('sync cannot reach a programme the caller is not enrolled in', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.enrol('account-a', 'tobacco');
@@ -169,7 +169,7 @@ test('sync cannot reach a programme the caller is not enrolled in', async (t) =>
   assert.equal(harness.world.lapses.length, 0);
 });
 
-test('one account cannot replay another account\'s batch receipt', async (t) => {
+void test('one account cannot replay another account\'s batch receipt', async (t) => {
   // The receipt is looked up by `(account, key)`. Keyed by the key alone, a
   // guessed key would let one caller learn that another had synced.
   const harness = await startHarness();

@@ -97,7 +97,7 @@ export function statusForProxyError(code: string | undefined): number {
 export function createServiceProxy(options: ProxyOptions): RequestHandler {
   const { route, target, timeoutMs } = options;
 
-  return createProxyMiddleware<Request, Response>({
+  const proxy = createProxyMiddleware<Request, Response>({
     target,
     changeOrigin: true,
 
@@ -178,4 +178,10 @@ export function createServiceProxy(options: ProxyOptions): RequestHandler {
       },
     },
   });
+
+  // `http-proxy-middleware` reports its own failures through `on.error`, so the
+  // promise its middleware returns carries nothing to await.
+  return (req, res, next) => {
+    Promise.resolve(proxy(req, res, next)).catch(next);
+  };
 }

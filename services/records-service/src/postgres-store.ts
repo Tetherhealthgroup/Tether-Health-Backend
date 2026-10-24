@@ -1,16 +1,12 @@
 import type { Transaction } from '@tether/core';
 import type { BlockAnswer } from './answers.ts';
 import type {
-  Appended,
   ConsentRow,
-  DeletionCounts,
   EnrolmentRow,
-  LapseInput,
   LapseRow,
   ObservationInput,
   ObservationRow,
   RecordStore,
-  StoreContext,
   StoredAnswer,
   SyncReceipt,
 } from './store.ts';

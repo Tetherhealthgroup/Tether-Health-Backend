@@ -11,7 +11,9 @@ import tseslint from 'typescript-eslint';
  * rejection, which `@tether/core`'s server treats as fatal and exits on.
  */
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/*.d.ts'] },
+  // The config is plain JavaScript outside every tsconfig, so the type-aware
+  // rules cannot resolve its imports and only report noise about itself.
+  { ignores: ['**/dist/**', '**/node_modules/**', '**/*.d.ts', 'eslint.config.js'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
@@ -34,12 +36,26 @@ export default tseslint.config(
     files: ['**/test/**/*.ts', 'db/*.ts'],
     rules: { 'no-console': 'off' },
   },
+  // Test code only; production source keeps every rule above.
+  //
+  // * `require-await`: the in-memory fakes under `test/` implement the same
+  //   async interfaces as the Postgres-backed stores, so their methods must
+  //   return a Promise but have nothing to wait on.
+  // * the `no-unsafe-*` family and `no-explicit-any`: the tests assert on
+  //   response bodies read straight off the wire as untyped JSON. Typing each
+  //   one would restate the production schemas inside the tests, and a wrong
+  //   restatement would pass silently. `no-floating-promises` and
+  //   `no-misused-promises` stay on for tests, since a forgotten `await` there
+  //   is a test that passes without asserting.
   {
-    // `node:test` registers a test by calling `test(...)`, which returns a promise
-    // the runner owns. Awaiting it would serialise every test in a file and
-    // `void`-ing each one would be noise on every line, so the rule that exists
-    // for request handlers (above) is off where it can only be a false positive.
-    files: ['**/test/**/*.ts'],
-    rules: { '@typescript-eslint/no-floating-promises': 'off' },
+    files: ['{db,packages/*,services/*}/test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+    },
   },
 );

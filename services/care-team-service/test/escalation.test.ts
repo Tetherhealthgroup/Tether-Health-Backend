@@ -14,7 +14,7 @@ import { startHarness } from './support/harness.ts';
 const CLINICIAN = 'clinician:11111111-1111-4111-8111-111111111111';
 const CLINICIAN_ID = '11111111-1111-4111-8111-111111111111';
 
-test('a programme with no configured policy cannot accept an escalation', async (t) => {
+void test('a programme with no configured policy cannot accept an escalation', async (t) => {
   // The tempting fallback — route it to the recipient on the consent, or to
   // whoever is nearest — is the exact failure the safeguard names, because the
   // nearest recipient in a cessation programme is a coach. Refusing is visible;
@@ -45,7 +45,7 @@ test('a programme with no configured policy cannot accept an escalation', async 
   assert.equal(event.detail.areaId, 'tobacco');
 });
 
-test('a configured policy routes the signal and snapshots where it went', async (t) => {
+void test('a configured policy routes the signal and snapshots where it went', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -82,7 +82,7 @@ test('a configured policy routes the signal and snapshots where it went', async 
   assert.equal(event.detail.routedToKind, 'clinician');
 });
 
-test('an escalation needs a live consent, like every other read', async (t) => {
+void test('an escalation needs a live consent, like every other read', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -102,7 +102,7 @@ test('an escalation needs a live consent, like every other read', async (t) => {
   );
 });
 
-test('a revoked consent stops an escalation being raised at all', async (t) => {
+void test('a revoked consent stops an escalation being raised at all', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -121,7 +121,7 @@ test('a revoked consent stops an escalation being raised at all', async (t) => {
   assert.equal(harness.world.escalations.length, 0);
 });
 
-test('an escalation cannot carry a risk score by any name', async (t) => {
+void test('an escalation cannot carry a risk score by any name', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');
@@ -141,7 +141,7 @@ test('an escalation cannot carry a risk score by any name', async (t) => {
   assert.equal(harness.world.escalations.length, 0);
 });
 
-test('the routing policy is readable, so a clinician knows where a signal goes', async (t) => {
+void test('the routing policy is readable, so a clinician knows where a signal goes', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   harness.world.policy('behavioral', { crisisContact: '988' });
@@ -160,7 +160,7 @@ test('the routing policy is readable, so a clinician knows where a signal goes',
   assert.equal(response.body.policy.crisisContact, '988');
 });
 
-test('an unconfigured programme reports that it is unconfigured', async (t) => {
+void test('an unconfigured programme reports that it is unconfigured', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
 
@@ -169,7 +169,7 @@ test('an unconfigured programme reports that it is unconfigured', async (t) => {
   assert.match(response.body.detail, /no escalation policy configured/);
 });
 
-test('a non-clinician cannot raise an escalation', async (t) => {
+void test('a non-clinician cannot raise an escalation', async (t) => {
   const harness = await startHarness();
   t.after(() => harness.close());
   const enrolment = harness.world.enrol('patient-a', 'behavioral');

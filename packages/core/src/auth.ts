@@ -67,7 +67,7 @@ export function createVerifier(options: VerifierOptions): Verifier {
         algorithms: [options.algorithm],
         clockTolerance: 5,
       }));
-    } catch (cause) {
+    } catch {
       // Deliberately one message for every failure mode. Distinguishing
       // "expired" from "wrong signature" from "wrong audience" tells an
       // attacker which of the three to work on.

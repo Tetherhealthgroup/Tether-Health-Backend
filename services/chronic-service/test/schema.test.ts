@@ -18,7 +18,7 @@ import {
  * body; these schemas take it from nowhere.
  */
 
-test('a VitalEntry.toJson() payload is accepted whole', () => {
+void test('a VitalEntry.toJson() payload is accepted whole', () => {
   // Copied from `lib/models/vital_entry.dart` — `ApiService.pushVital` posts
   // this object unmodified.
   const payload = {
@@ -39,7 +39,7 @@ test('a VitalEntry.toJson() payload is accepted whole', () => {
   assert.equal(result.data?.timestamp instanceof Date, true);
 });
 
-test('a vital with no label, unit or note still parses', () => {
+void test('a vital with no label, unit or note still parses', () => {
   const result = vitalEntrySchema.safeParse({ metricKey: 'steps', value: 4312 });
   assert.equal(result.success, true);
   assert.equal(result.data?.label, '');
@@ -48,7 +48,7 @@ test('a vital with no label, unit or note still parses', () => {
   assert.equal(result.data?.source, 'manual');
 });
 
-test('a Medication.toJson() payload is accepted whole', () => {
+void test('a Medication.toJson() payload is accepted whole', () => {
   const payload = {
     id: 'local-uuid',
     name: 'Metformin',
@@ -65,7 +65,7 @@ test('a Medication.toJson() payload is accepted whole', () => {
   assert.deepEqual(result.data?.times, ['08:00', '20:00']);
 });
 
-test('a reminder time that is not HH:MM is refused', () => {
+void test('a reminder time that is not HH:MM is refused', () => {
   // The same rule the database enforces via `chronic.is_time_of_day_list`.
   // Failing here makes it a 400 naming the field instead of a 500 from a CHECK.
   for (const time of ['8:00', '24:00', '08:60', 'morning', '0800']) {
@@ -77,7 +77,7 @@ test('a reminder time that is not HH:MM is refused', () => {
   }
 });
 
-test('no schema accepts an owner from the request body', () => {
+void test('no schema accepts an owner from the request body', () => {
   // The FastAPI predecessor's `ConditionCreate` and `MedicationCreate` both
   // take `profile_id` from the body and write it. A body that can name its own
   // owner can name somebody else's.
@@ -116,19 +116,19 @@ test('no schema accepts an owner from the request body', () => {
   }
 });
 
-test('only the five shipped condition kinds are accepted', () => {
+void test('only the five shipped condition kinds are accepted', () => {
   for (const kind of ['diabetes', 'hypertension', 'cholesterol', 'asthma', 'smoking_cessation']) {
     assert.equal(conditionCreateSchema.safeParse({ kind }).success, true, kind);
   }
   assert.equal(conditionCreateSchema.safeParse({ kind: 'copd' }).success, false);
 });
 
-test('a health score outside 0-100 is refused', () => {
+void test('a health score outside 0-100 is refused', () => {
   assert.equal(profilePatchSchema.safeParse({ healthScore: 101 }).success, false);
   assert.equal(profilePatchSchema.safeParse({ healthScore: -1 }).success, false);
   assert.equal(profilePatchSchema.safeParse({ healthScore: 100 }).success, true);
 });
 
-test('an empty patch is valid, because a PATCH also creates the profile', () => {
+void test('an empty patch is valid, because a PATCH also creates the profile', () => {
   assert.equal(profilePatchSchema.safeParse({}).success, true);
 });
