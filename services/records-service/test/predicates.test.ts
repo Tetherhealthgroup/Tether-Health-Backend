@@ -16,7 +16,7 @@ import { createPostgresStore } from '../src/postgres-store.ts';
 const ACCOUNT = '11111111-1111-4111-8111-111111111111';
 const ENROLMENT = 'aaaaaaaa-0000-4000-8000-000000000001';
 
-test('clearing a screen\'s dropped blocks names the caller as the enrolment\'s owner', async () => {
+void test('clearing a screen\'s dropped blocks names the caller as the enrolment\'s owner', async () => {
   const tx = recordingTransaction([]);
   const store = createPostgresStore();
 
@@ -30,7 +30,7 @@ test('clearing a screen\'s dropped blocks names the caller as the enrolment\'s o
   assert.match(remove.sql, /own\.id = record\.screen_answer\.enrolment_id/);
 });
 
-test('every read of the record names the account', async () => {
+void test('every read of the record names the account', async () => {
   const tx = recordingTransaction([]);
   const store = createPostgresStore();
   const ctx = { tx, accountId: ACCOUNT };

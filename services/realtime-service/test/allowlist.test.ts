@@ -18,7 +18,7 @@ const ACCOUNT = '11111111-1111-4111-8111-111111111111';
 const OWN = 'aaaaaaaa-0000-4000-8000-000000000001';
 const SHARED = 'bbbbbbbb-0000-4000-8000-000000000001';
 
-test('both lookups name the account', async () => {
+void test('both lookups name the account', async () => {
   const tx = recordingTransaction([]);
 
   await resolveAllowlist(tx, ACCOUNT);
@@ -35,7 +35,7 @@ test('both lookups name the account', async () => {
   assert.match(shared.sql, /revoked_at IS NULL/);
 });
 
-test('owned and shared are kept apart', async () => {
+void test('owned and shared are kept apart', async () => {
   const tx = recordingTransaction((s) =>
     /FROM programme\.enrolment/.test(s.sql) ? [{ id: OWN }] : [{ enrolment_id: SHARED }],
   );
@@ -46,7 +46,7 @@ test('owned and shared are kept apart', async () => {
   assert.deepEqual([...allowlist.shared], [SHARED]);
 });
 
-test('an enrolment the account owns is never also "shared with" it', async () => {
+void test('an enrolment the account owns is never also "shared with" it', async () => {
   // A consent naming the owner as recipient of their own enrolment is odd but
   // representable. It must not put the enrolment in the set a revocation can
   // remove it from.
@@ -60,7 +60,7 @@ test('an enrolment the account owns is never also "shared with" it', async () =>
   assert.deepEqual([...allowlist.shared], []);
 });
 
-test('an upper-case account id is normalised before it is compared as text', async () => {
+void test('an upper-case account id is normalised before it is compared as text', async () => {
   // `recipient_id` is text; the policies compare it with the lower-case form of
   // the setting, so the allow-list must too.
   const tx = recordingTransaction([]);
@@ -73,13 +73,13 @@ test('an upper-case account id is normalised before it is compared as text', asy
   }
 });
 
-test('an account id that is not a uuid is refused before any statement runs', async () => {
+void test('an account id that is not a uuid is refused before any statement runs', async () => {
   const tx = recordingTransaction([]);
   await assert.rejects(resolveAllowlist(tx, 'not-a-uuid'), /not a uuid/);
   assert.equal(tx.statements.length, 0);
 });
 
-test('R-063: the revocation lookup names the account and the enrolment, and only live consents count', async () => {
+void test('R-063: the revocation lookup names the account and the enrolment, and only live consents count', async () => {
   const none = recordingTransaction([]);
   assert.equal(await holdsLiveConsent(none, ACCOUNT.toUpperCase(), SHARED), false);
 
@@ -94,7 +94,7 @@ test('R-063: the revocation lookup names the account and the enrolment, and only
   assert.equal(await holdsLiveConsent(one, ACCOUNT, SHARED), true);
 });
 
-test('R-063: the revocation lookup refuses an account id that is not a uuid before any statement runs', async () => {
+void test('R-063: the revocation lookup refuses an account id that is not a uuid before any statement runs', async () => {
   const tx = recordingTransaction([]);
   await assert.rejects(holdsLiveConsent(tx, 'someone@example.invalid', SHARED), /not a uuid/);
   assert.equal(tx.statements.length, 0);

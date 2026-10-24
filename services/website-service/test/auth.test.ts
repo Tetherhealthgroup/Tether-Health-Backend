@@ -131,7 +131,7 @@ async function call(
   return response.status;
 }
 
-test('an unauthenticated delete is rejected and touches nothing', async () => {
+void test('an unauthenticated delete is rejected and touches nothing', async () => {
   const server = await start();
   try {
     assert.equal(await call(server, 'DELETE', `/waitlist/${ENQUIRY}`), 401);
@@ -141,7 +141,7 @@ test('an unauthenticated delete is rejected and touches nothing', async () => {
   }
 });
 
-test('a delete with a token that does not verify is rejected', async () => {
+void test('a delete with a token that does not verify is rejected', async () => {
   const server = await start();
   try {
     assert.equal(
@@ -154,7 +154,7 @@ test('a delete with a token that does not verify is rejected', async () => {
   }
 });
 
-test('a verified token without the admin role is forbidden', async () => {
+void test('a verified token without the admin role is forbidden', async () => {
   const server = await start();
   try {
     assert.equal(
@@ -167,7 +167,7 @@ test('a verified token without the admin role is forbidden', async () => {
   }
 });
 
-test('an admin delete erases the enquiry and records who did it, not whose it was', async () => {
+void test('an admin delete erases the enquiry and records who did it, not whose it was', async () => {
   const server = await start();
   try {
     assert.equal(
@@ -190,7 +190,7 @@ test('an admin delete erases the enquiry and records who did it, not whose it wa
   }
 });
 
-test('a malformed id is a 204 for an admin, and a 401 for nobody', async () => {
+void test('a malformed id is a 204 for an admin, and a 401 for nobody', async () => {
   const server = await start();
   try {
     assert.equal(await call(server, 'DELETE', '/waitlist/not-a-uuid', { token: 'admin-token' }), 204);
@@ -201,7 +201,7 @@ test('a malformed id is a 204 for an admin, and a 401 for nobody', async () => {
   }
 });
 
-test('the form is still public, and the retention purge is still admin only', async () => {
+void test('the form is still public, and the retention purge is still admin only', async () => {
   const server = await start();
   try {
     const created = await call(server, 'POST', '/waitlist', {
@@ -222,7 +222,7 @@ test('the form is still public, and the retention purge is still admin only', as
   }
 });
 
-test('S2: a token that fails to verify is answered by the error handler, on both admin routes, with no unhandled rejection', async () => {
+void test('S2: a token that fails to verify is answered by the error handler, on both admin routes, with no unhandled rejection', async () => {
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown): void => {
     unhandled.push(reason);

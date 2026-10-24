@@ -176,7 +176,7 @@ const code = (name: string): string =>
     .map((line) => line.replace(/--.*$/, ''))
     .join('\n');
 
-test('no migration sets a password or carries a credential', () => {
+void test('no migration sets a password or carries a credential', () => {
   // A password in a migration is a password in every clone of the repository.
   // Roles are created locked and the operator sets the password out of band.
   for (const name of files) {
@@ -189,7 +189,7 @@ test('no migration sets a password or carries a credential', () => {
 /** `code()` with quoted strings blanked, so an error message cannot trip a keyword check. */
 const codeWithoutStrings = (name: string): string => code(name).replace(/'(?:[^']|'')*'/g, "''");
 
-test('no migration creates or alters a role to be a superuser, to bypass RLS, or to create roles', () => {
+void test('no migration creates or alters a role to be a superuser, to bypass RLS, or to create roles', () => {
   const offenders: string[] = [];
   for (const name of files) {
     // `NOSUPERUSER` and friends are the point; a bare `SUPERUSER` is not.
@@ -200,7 +200,7 @@ test('no migration creates or alters a role to be a superuser, to bypass RLS, or
   assert.deepEqual(offenders, []);
 });
 
-test('every login role is created locked and is never given a password here', () => {
+void test('every login role is created locked and is never given a password here', () => {
   const sql = code('20260914120800_service_roles.sql');
   assert.match(sql, /LOGIN VALID UNTIL %L/, 'login roles are not created with a VALID UNTIL');
   assert.match(sql, /'-infinity'/, 'login roles are not created locked');
@@ -220,7 +220,7 @@ test('every login role is created locked and is never given a password here', ()
   assert.match(sql, /rolsuper OR rolbypassrls OR rolreplication/, 'no guard against a privileged tether_ role');
 });
 
-test('grants to service roles are explicit: no GRANT ALL, no grant option, no schema CREATE', () => {
+void test('grants to service roles are explicit: no GRANT ALL, no grant option, no schema CREATE', () => {
   const sql = code('20260914121000_service_grants.sql');
   assert.doesNotMatch(sql, /GRANT\s+ALL\b/i, 'a service role is granted ALL');
   assert.doesNotMatch(sql, /WITH\s+GRANT\s+OPTION/i);
@@ -229,7 +229,7 @@ test('grants to service roles are explicit: no GRANT ALL, no grant option, no sc
   assert.doesNotMatch(sql, /\bTRUNCATE\b|\bREFERENCES\b|\bTRIGGER\b/);
 });
 
-test('no existing migration was edited to make room for the service roles', () => {
+void test('no existing migration was edited to make room for the service roles', () => {
   // The roles, grants and policy fixes are new files. 0001 to 0008 are the
   // history other environments have already applied.
   const added = files.filter((name) => name.slice(0, 14) > '20260914120700');
@@ -241,7 +241,7 @@ test('no existing migration was edited to make room for the service roles', () =
   ]);
 });
 
-test('every table the new policies protect still has RLS forced', () => {
+void test('every table the new policies protect still has RLS forced', () => {
   const all = files.map(read).join('\n');
   for (const table of ['ops.audit_event', 'identity.account', 'ops.waitlist_enquiry']) {
     const escaped = table.replace('.', '\\.');
@@ -250,7 +250,7 @@ test('every table the new policies protect still has RLS forced', () => {
   }
 });
 
-test('the SECURITY DEFINER functions pin their search_path and are not executable by PUBLIC', () => {
+void test('the SECURITY DEFINER functions pin their search_path and are not executable by PUBLIC', () => {
   const sql = code('20260914120900_rls_consent_policies.sql');
   // One chunk per function, so one function's text cannot satisfy another's check.
   const definers = sql
@@ -272,7 +272,7 @@ test('the SECURITY DEFINER functions pin their search_path and are not executabl
   }
 });
 
-test('the audit trail has no blanket INSERT policy: each service appends only what it authors', () => {
+void test('the audit trail has no blanket INSERT policy: each service appends only what it authors', () => {
   const sql = code('20260914120900_rls_consent_policies.sql');
   assert.doesNotMatch(sql, /CREATE POLICY audit_event_append ON/i, 'the single open append policy is back');
 
@@ -286,7 +286,7 @@ test('the audit trail has no blanket INSERT policy: each service appends only wh
   }
 });
 
-test('the recipient policies are recreated for the clinician surface only', () => {
+void test('the recipient policies are recreated for the clinician surface only', () => {
   const sql = code('20260914120900_rls_consent_policies.sql');
   for (const policy of [
     'sharing_consent_recipient', 'enrolment_consented_recipient', 'screen_answer_consented_recipient',
@@ -297,7 +297,7 @@ test('the recipient policies are recreated for the clinician surface only', () =
   }
 });
 
-test('the revocation payload migration replaces only the notify function, with an empty search_path, and names no recipient', () => {
+void test('the revocation payload migration replaces only the notify function, with an empty search_path, and names no recipient', () => {
   const sql = code('20260914121100_consent_revocation_recipient.sql');
   assert.match(sql, /CREATE OR REPLACE FUNCTION programme\.notify_consent_change\(\)/);
   assert.match(sql, /SET search_path = ''/);
@@ -307,14 +307,14 @@ test('the revocation payload migration replaces only the notify function, with a
   assert.doesNotMatch(sql, /CREATE TRIGGER|DROP /i);
 });
 
-test('the revocation payload migration constrains recipient_id to a lowercase uuid or NULL, without scanning old rows', () => {
+void test('the revocation payload migration constrains recipient_id to a lowercase uuid or NULL, without scanning old rows', () => {
   const sql = code('20260914121100_consent_revocation_recipient.sql');
   assert.match(sql, /ALTER TABLE programme\.sharing_consent\s+ADD CONSTRAINT sharing_consent_recipient_id_uuid/);
   assert.match(sql, /recipient_id IS NULL\s+OR recipient_id ~ '\^\[0-9a-f\]\{8\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{4\}-\[0-9a-f\]\{12\}\$'/);
   assert.match(sql, /NOT VALID;/);
 });
 
-test('care.lapse_details gives its owner policies of its own and keeps them off every service login', () => {
+void test('care.lapse_details gives its owner policies of its own and keeps them off every service login', () => {
   const sql = code('20260914120900_rls_consent_policies.sql');
   assert.match(sql, /CREATE POLICY sharing_consent_lapse_details ON programme\.sharing_consent FOR SELECT TO %I/);
   assert.match(sql, /CREATE POLICY lapse_event_lapse_details ON record\.lapse_event FOR SELECT TO %I/);

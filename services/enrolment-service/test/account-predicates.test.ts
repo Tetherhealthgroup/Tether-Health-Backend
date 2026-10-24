@@ -42,7 +42,7 @@ const ROW = {
   endedAt: null,
 };
 
-test('every enrolment read and write names the account', async () => {
+void test('every enrolment read and write names the account', async () => {
   // Enrolment statements get a row; consent statements get none.
   const tx = recordingTransaction((s) =>
     /sharing_consent/.test(s.sql) ? [] : [ROW],
@@ -75,7 +75,7 @@ function assertOwnershipJoinQualified(sql: string): void {
   );
 }
 
-test('consent reads, grants and revocations are scoped to the owner of the enrolment', async () => {
+void test('consent reads, grants and revocations are scoped to the owner of the enrolment', async () => {
   const tx = recordingTransaction([]);
 
   await loadConsents(tx, ACCOUNT, ENROLMENT);
@@ -94,7 +94,7 @@ test('consent reads, grants and revocations are scoped to the owner of the enrol
   }
 });
 
-test('a grant is written only against an enrolment the account owns', async () => {
+void test('a grant is written only against an enrolment the account owns', async () => {
   const consentRow = {
     id: 'cccccccc-0000-4000-8000-000000000001',
     enrolmentId: ENROLMENT,
@@ -132,7 +132,7 @@ test('a grant is written only against an enrolment the account owns', async () =
   assert.equal(insert.params[6], ACCOUNT);
 });
 
-test('a grant against an enrolment that is not the account\'s fails rather than succeeding quietly', async () => {
+void test('a grant against an enrolment that is not the account\'s fails rather than succeeding quietly', async () => {
   const tx = recordingTransaction([]);
   await assert.rejects(
     grantConsent(tx, ACCOUNT, {
@@ -147,7 +147,7 @@ test('a grant against an enrolment that is not the account\'s fails rather than 
   );
 });
 
-test('the share preview reads only the account\'s own record', async () => {
+void test('the share preview reads only the account\'s own record', async () => {
   const tx = recordingTransaction([]);
 
   await loadPreviewSource(

@@ -22,7 +22,7 @@ const CANARIES = [
   'diabetes',
 ];
 
-test('writing a condition, a vital and a medication logs ids and nothing about their contents', async () => {
+void test('writing a condition, a vital and a medication logs ids and nothing about their contents', async () => {
   const h = await startHarness();
   try {
     const condition = await h.request('POST', '/conditions', { kind: 'diabetes' });
@@ -60,7 +60,7 @@ test('writing a condition, a vital and a medication logs ids and nothing about t
   }
 });
 
-test('a database failure that carries the row does not put the row in the log', async () => {
+void test('a database failure that carries the row does not put the row in the log', async () => {
   // The shape `pg` gives a violated constraint: a generic message, and `detail`
   // holding the failing row.
   const failure = Object.assign(new Error('new row violates check constraint'), {
@@ -86,7 +86,7 @@ test('a database failure that carries the row does not put the row in the log', 
   }
 });
 
-test('deleting a medication logs the id, which is not a name', async () => {
+void test('deleting a medication logs the id, which is not a name', async () => {
   const h = await startHarness();
   try {
     const response = await h.request(

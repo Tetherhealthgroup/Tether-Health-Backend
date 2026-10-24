@@ -26,7 +26,7 @@ function capture(): { lines: () => string[]; logger: ReturnType<typeof createLog
   return { logger, lines: () => chunks.join('').split('\n').filter(Boolean) };
 }
 
-test('a metric key, a reading and a drug name are redacted one level down', () => {
+void test('a metric key, a reading and a drug name are redacted one level down', () => {
   const { logger, lines } = capture();
 
   logger.info(
@@ -51,7 +51,7 @@ test('a metric key, a reading and a drug name are redacted one level down', () =
   assert.match(line, /\[REDACTED\]/);
 });
 
-test('a database error does not carry the row it was about into the log', () => {
+void test('a database error does not carry the row it was about into the log', () => {
   const { logger, lines } = capture();
 
   // The shape `pg` gives a check or not-null violation: the message is generic,
@@ -77,7 +77,7 @@ test('a database error does not carry the row it was about into the log', () => 
   assert.match(line, /vital_entry_value_check/);
 });
 
-test('a row-bearing field on a wrapped cause does not surface either', () => {
+void test('a row-bearing field on a wrapped cause does not surface either', () => {
   const inner = Object.assign(new Error('inner'), {
     detail: 'Key (email)=(a@example.test) already exists.',
   });
@@ -89,7 +89,7 @@ test('a row-bearing field on a wrapped cause does not surface either', () => {
   assert.ok(!JSON.stringify(out).includes('a@example.test'));
 });
 
-test('metric keys and readings are redacted at the top level of a log object too', () => {
+void test('metric keys and readings are redacted at the top level of a log object too', () => {
   // pino's `*.key` matches one level down only, so a handler that wrote
   // `log.info({ metricKey })` bypassed the list. Both spellings are listed now.
   const { logger, lines } = capture();
@@ -105,7 +105,7 @@ test('metric keys and readings are redacted at the top level of a log object too
   }
 });
 
-test('a refusal\'s context does not name the programme or the enrolment', () => {
+void test('a refusal\'s context does not name the programme or the enrolment', () => {
   const { logger, lines } = capture();
 
   logger.info(
@@ -119,7 +119,7 @@ test('a refusal\'s context does not name the programme or the enrolment', () => 
   assert.match(line, /request refused/);
 });
 
-test('row-bearing fields are stripped from an error kept inside another error, and from an AggregateError', () => {
+void test('row-bearing fields are stripped from an error kept inside another error, and from an AggregateError', () => {
   const pgError = (detail: string) =>
     Object.assign(new Error('constraint violated'), { code: '23505', detail, where: `ctx ${detail}` });
 
@@ -137,7 +137,7 @@ test('row-bearing fields are stripped from an error kept inside another error, a
   assert.match(line, /23505/);
 });
 
-test('a cyclic error does not hang or throw the logger', () => {
+void test('a cyclic error does not hang or throw the logger', () => {
   const error: Error & { self?: unknown } = new Error('cyclic');
   error.self = error;
   assert.doesNotThrow(() => serializeError(error));

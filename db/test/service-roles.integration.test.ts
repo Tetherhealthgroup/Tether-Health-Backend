@@ -84,7 +84,7 @@ import {
 const started = await startPostgres();
 
 if ('skip' in started) {
-  test('service-role integration suite', { skip: `NOT RUN: ${started.skip}` }, () => {});
+  void test('service-role integration suite', { skip: `NOT RUN: ${started.skip}` }, () => {});
 } else {
   registerSuite(started.postgres);
 }
@@ -362,7 +362,7 @@ function registerSuite(pg: TestPostgres): void {
   });
 
   // The database as it is when it is first migrated, before any operator step.
-  test(`[setup] ${pg.description}`, async () => {
+  void test(`[setup] ${pg.description}`, async () => {
     const [row] = await pg.admin<{ version: string }>('SELECT version() AS version');
     assert.ok(row?.version, 'the server did not answer');
   });
@@ -371,7 +371,7 @@ function registerSuite(pg: TestPostgres): void {
   // Roles
   // -------------------------------------------------------------------------
 
-  test('the roles are exactly the eighteen intended, none of them a superuser, none bypassing RLS', async () => {
+  void test('the roles are exactly the eighteen intended, none of them a superuser, none bypassing RLS', async () => {
     const roles = await pg.admin<Row>(
       `SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole,
               rolreplication, rolinherit, rolconnlimit
@@ -392,7 +392,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('each login role is a member of its own group and of nothing else', async () => {
+  void test('each login role is a member of its own group and of nothing else', async () => {
     for (const service of SERVICES) {
       const memberships = await pg.admin<{ role: string }>(
         `SELECT g.rolname AS role
@@ -412,7 +412,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(groupsInGroups.length, 0, 'a group role is a member of another role');
   });
 
-  test('no service role owns a schema, relation, function or type', async () => {
+  void test('no service role owns a schema, relation, function or type', async () => {
     const owned = await pg.admin<{ what: string }>(
       `SELECT 'relation ' || c.relname AS what FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner WHERE r.rolname LIKE 'tether\\_%'
        UNION ALL SELECT 'schema ' || n.nspname FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE r.rolname LIKE 'tether\\_%'
@@ -422,7 +422,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(owned, [], 'an owner is exempt from non-FORCEd RLS and can change its own grants');
   });
 
-  test('the login roles are created locked, with no password and no way in until an operator acts', async () => {
+  void test('the login roles are created locked, with no password and no way in until an operator acts', async () => {
     const roles = await pg.admin<{ rolname: string; valid_until: string; has_password: boolean }>(
       `SELECT r.rolname, r.rolvaliduntil::text AS valid_until, (a.rolpassword IS NOT NULL) AS has_password
          FROM pg_roles r JOIN pg_authid a ON a.oid = r.oid
@@ -435,7 +435,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('a locked role cannot connect even once it has a password; unlocking it is what db/ROLES.md says', { skip: pg.canLogin ? false : 'NOT RUN: this driver switches role in one session and cannot authenticate' }, async () => {
+  void test('a locked role cannot connect even once it has a password; unlocking it is what db/ROLES.md says', { skip: pg.canLogin ? false : 'NOT RUN: this driver switches role in one session and cannot authenticate' }, async () => {
     // The operator sets a password but forgets VALID UNTIL: still no way in.
     await pg.setPasswordOnly('catalogue');
     assert.equal(await pg.canConnectAs('catalogue'), false, 'connected while locked');
@@ -446,7 +446,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('the service roles can connect and are not superusers once connected', async () => {
+  void test('the service roles can connect and are not superusers once connected', async () => {
     await pg.unlockLoginRoles();
     for (const service of SERVICES) {
       const rows = await pg.databaseFor(service).withoutPrincipal((tx) =>
@@ -466,7 +466,7 @@ function registerSuite(pg: TestPostgres): void {
   // RLS is on, and forced, everywhere it should be
   // -------------------------------------------------------------------------
 
-  test('every table that holds or gates personal data has RLS enabled, forced, and a policy', async () => {
+  void test('every table that holds or gates personal data has RLS enabled, forced, and a policy', async () => {
     const unprotected = await pg.admin<{ t: string; problem: string }>(
       `SELECT n.nspname || '.' || c.relname AS t,
               CASE WHEN NOT c.relrowsecurity THEN 'not enabled'
@@ -485,7 +485,7 @@ function registerSuite(pg: TestPostgres): void {
   // Grants: least privilege, compared with an independent statement of it
   // -------------------------------------------------------------------------
 
-  test('the privilege matrix: every role holds exactly what its service uses, on every table and column', async () => {
+  void test('the privilege matrix: every role holds exactly what its service uses, on every table and column', async () => {
     const columns = await pg.admin<{ t: string; c: string }>(
       `SELECT n.nspname || '.' || cl.relname AS t, a.attname AS c
          FROM pg_attribute a
@@ -545,7 +545,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(mismatches, [], 'grants differ from the matrix in this file');
   });
 
-  test('the two SECURITY DEFINER helpers are executable by their one service and nobody else', async () => {
+  void test('the two SECURITY DEFINER helpers are executable by their one service and nobody else', async () => {
     const expected: Record<string, Service> = {
       'care.lapse_details(uuid)': 'care_team',
       'ops.release_device_token(text)': 'notification',
@@ -561,7 +561,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('PUBLIC holds nothing in these schemas, and the Supabase API roles lost what the hosted defaults gave them', async () => {
+  void test('PUBLIC holds nothing in these schemas, and the Supabase API roles lost what the hosted defaults gave them', async () => {
     const publicGrants = await pg.admin<{ t: string }>(
       `SELECT n.nspname || '.' || c.relname AS t
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -590,7 +590,7 @@ function registerSuite(pg: TestPostgres): void {
   // Policies that could not run under a superuser
   // -------------------------------------------------------------------------
 
-  test('0010 backfills owner_account_id on rows that existed before it, and puts FORCE back', async () => {
+  void test('0010 backfills owner_account_id on rows that existed before it, and puts FORCE back', async () => {
     // Seeded by applyMigrations before 0010 ran. Must run before any test truncates.
     const [row] = await pg.admin<{ owner_account_id: string }>(
       `SELECT owner_account_id FROM programme.sharing_consent WHERE id = $1`,
@@ -615,7 +615,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(nullable?.is_nullable, 'NO');
   });
 
-  test('the SECURITY DEFINER functions run with an empty search_path and are not executable by the API roles', async () => {
+  void test('the SECURITY DEFINER functions run with an empty search_path and are not executable by the API roles', async () => {
     const functions = await pg.admin<{ name: string; config: string[] | null }>(
       `SELECT n.nspname || '.' || p.proname AS name, p.proconfig AS config
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -635,7 +635,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('R-032: the enrolment/consent policies evaluate for a role that is subject to them', async () => {
+  void test('R-032: the enrolment/consent policies evaluate for a role that is subject to them', async () => {
     // Before 0010 every one of these raised 42P17, "infinite recursion detected
     // in policy". A superuser never evaluates policies, so nothing had noticed.
     await seed(pg);
@@ -659,7 +659,7 @@ function registerSuite(pg: TestPostgres): void {
   // enrolment-service
   // -------------------------------------------------------------------------
 
-  test('enrolment: an account reads its own enrolments with their live consents', async () => {
+  void test('enrolment: an account reads its own enrolments with their live consents', async () => {
     await seed(pg);
     const enrolments = await pg.databaseFor('enrolment').withPrincipal(A, (tx) => loadEnrolments(tx, A));
 
@@ -667,7 +667,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(enrolments[0]?.consents.map((c) => c.id).sort(), [CONSENT_CLIN2_NOTES, CONSENT_CLIN_TOTALS].sort());
   });
 
-  test('enrolment: cross-account reads, updates and deletes reach nothing', async () => {
+  void test('enrolment: cross-account reads, updates and deletes reach nothing', async () => {
     await seed(pg);
     const db = pg.databaseFor('enrolment');
 
@@ -689,7 +689,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('enrolment: a patient who is also a recipient does not see shared programmes as their own', async () => {
+  void test('enrolment: a patient who is also a recipient does not see shared programmes as their own', async () => {
     // The reason the policy alone is not enough. CLIN holds a live consent on
     // ENR_A, so the recipient policy lets CLIN SELECT it; and CLIN has an
     // enrolment of their own in the same area.
@@ -717,7 +717,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(row?.id, ENR_C);
   });
 
-  test('enrolment: a consent can be granted and revoked on one\'s own enrolment, and on nobody else\'s', async () => {
+  void test('enrolment: a consent can be granted and revoked on one\'s own enrolment, and on nobody else\'s', async () => {
     await seed(pg);
     const db = pg.databaseFor('enrolment');
     const wording = {
@@ -784,7 +784,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('enrolment: the share preview reads only the caller\'s own record', async () => {
+  void test('enrolment: the share preview reads only the caller\'s own record', async () => {
     await seed(pg);
     const db = pg.databaseFor('enrolment');
     const enrolment = await db.withPrincipal(A, (tx) => loadEnrolmentRow(tx, A, 'tobacco'));
@@ -806,7 +806,7 @@ function registerSuite(pg: TestPostgres): void {
   // The consent-recipient policy
   // -------------------------------------------------------------------------
 
-  test('consent: a recipient sees only their own live grant, never another recipient\'s, a revoked one, or a stranger\'s', async () => {
+  void test('consent: a recipient sees only their own live grant, never another recipient\'s, a revoked one, or a stranger\'s', async () => {
     await seed(pg);
     const db = pg.databaseFor('care_team');
     const visible = async (who: string): Promise<string[]> =>
@@ -817,7 +817,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(await visible(STRANGER), []);
   });
 
-  test('consent: an owner sees every consent on their own enrolments, revoked ones included, and nobody else\'s', async () => {
+  void test('consent: an owner sees every consent on their own enrolments, revoked ones included, and nobody else\'s', async () => {
     await seed(pg);
     const db = pg.databaseFor('enrolment');
     const visible = async (who: string): Promise<string[]> =>
@@ -828,7 +828,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(await visible(STRANGER), []);
   });
 
-  test('consent: the policy layer on its own — a recipient cannot write, change or delete a consent', async () => {
+  void test('consent: the policy layer on its own — a recipient cannot write, change or delete a consent', async () => {
     // A probe role holding every privilege, so the only thing between it and a
     // row is the policy. Created here, never by a migration.
     await seed(pg);
@@ -858,7 +858,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('consent: under a totals_and_adherence grant, free text and lapse detail are not readable', async () => {
+  void test('consent: under a totals_and_adherence grant, free text and lapse detail are not readable', async () => {
     await seed(pg);
     const db = pg.databaseFor('care_team');
     const store = createCareStore();
@@ -890,7 +890,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('consent: under a notes grant the free text and lapse detail are readable, for that enrolment only', async () => {
+  void test('consent: under a notes grant the free text and lapse detail are readable, for that enrolment only', async () => {
     await seed(pg);
     const store = createCareStore();
 
@@ -909,7 +909,7 @@ function registerSuite(pg: TestPostgres): void {
     });
   });
 
-  test('consent: revocation takes effect on the next statement', async () => {
+  void test('consent: revocation takes effect on the next statement', async () => {
     await seed(pg);
     const db = pg.databaseFor('care_team');
     const store = createCareStore();
@@ -929,7 +929,7 @@ function registerSuite(pg: TestPostgres): void {
     });
   });
 
-  test('consent: a clinician who is also a patient is not served their own enrolment as a shared one', async () => {
+  void test('consent: a clinician who is also a patient is not served their own enrolment as a shared one', async () => {
     await seed(pg);
     const store = createCareStore();
 
@@ -942,7 +942,7 @@ function registerSuite(pg: TestPostgres): void {
     });
   });
 
-  test('consent: an escalation is raised against the clinician\'s own live consent, and cannot be edited or removed', async () => {
+  void test('consent: an escalation is raised against the clinician\'s own live consent, and cannot be edited or removed', async () => {
     await seed(pg);
     const store = createCareStore();
     const policy = {
@@ -995,7 +995,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('audit: a clinician\'s disclosure is filed under the patient\'s account, and an account reads only its own trail', async () => {
+  void test('audit: a clinician\'s disclosure is filed under the patient\'s account, and an account reads only its own trail', async () => {
     await seed(pg);
 
     // care-team appends a row about A while acting as CLIN.
@@ -1026,7 +1026,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event`), before, 'an audit row was deleted');
   });
 
-  test('R-059: no service can forge another service\'s audit rows, and none can forge a sync receipt but records, for itself', async () => {
+  void test('R-059: no service can forge another service\'s audit rows, and none can forge a sync receipt but records, for itself', async () => {
     await seed(pg);
     const forge = (service: Service, principal: string | null, account: string | null, action: string) =>
       failsWith(
@@ -1059,7 +1059,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event WHERE action = 'record.sync' AND account_id = '${A}'`), 1);
   });
 
-  test('R-059: each service can write the audit rows it authors, about the account it is allowed to', async () => {
+  void test('R-059: each service can write the audit rows it authors, about the account it is allowed to', async () => {
     await seed(pg);
     const row = (account: string | null, action: string) => [account, action] as const;
     const insert = (tx: Transaction, [account, action]: readonly [string | null, string]) =>
@@ -1095,7 +1095,7 @@ function registerSuite(pg: TestPostgres): void {
     await pg.databaseFor('records').withPrincipal(A, (tx) => insert(tx, row(A, 'record.delete')));
   });
 
-  test('R-060: enrolment-service and records-service, as a recipient, see nothing of another account\'s record', async () => {
+  void test('R-060: enrolment-service and records-service, as a recipient, see nothing of another account\'s record', async () => {
     // CLIN holds a live totals consent on ENR_A (and a notes-scope consent exists for CLIN2).
     // Neither service is the clinician surface, so the recipient policies do not apply to them.
     await seed(pg);
@@ -1135,7 +1135,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('R-060: the clinician surface and the stream are the only roles the recipient policies apply to', async () => {
+  void test('R-060: the clinician surface and the stream are the only roles the recipient policies apply to', async () => {
     const rows = await pg.admin<{ tablename: string; policyname: string; roles: string[] }>(
       `SELECT tablename, policyname, roles FROM pg_policies
         WHERE policyname LIKE '%recipient%' OR policyname LIKE '%consented%' ORDER BY 1, 2`,
@@ -1152,7 +1152,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(realtime, ['sharing_consent_recipient']);
   });
 
-  test('device release: it needs a principal, and works for an owner that does not bypass RLS', async () => {
+  void test('device release: it needs a principal, and works for an owner that does not bypass RLS', async () => {
     await seed(pg);
     const notify = pg.databaseFor('notification');
 
@@ -1210,7 +1210,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('B1: care.lapse_details returns the notes recipient\'s rows for an owner that does not bypass RLS, and only theirs', async () => {
+  void test('B1: care.lapse_details returns the notes recipient\'s rows for an owner that does not bypass RLS, and only theirs', async () => {
     await seed(pg);
     const care = pg.databaseFor('care_team');
     const detail = (clinician: string, enrolment: string) =>
@@ -1293,7 +1293,7 @@ function registerSuite(pg: TestPostgres): void {
   // records-service
   // -------------------------------------------------------------------------
 
-  test('records: reads are the caller\'s own, and writes against another account\'s enrolment are refused', async () => {
+  void test('records: reads are the caller\'s own, and writes against another account\'s enrolment are refused', async () => {
     await seed(pg);
     const db = pg.databaseFor('records');
     const store = createRecordsStore();
@@ -1324,7 +1324,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(await count(pg, `SELECT 1 FROM record.observation WHERE enrolment_id = '${ENR_B}'`), 1, 'B\'s record changed');
   });
 
-  test('records: unqualified deletes and updates touch only the caller\'s rows, or are refused outright', async () => {
+  void test('records: unqualified deletes and updates touch only the caller\'s rows, or are refused outright', async () => {
     await seed(pg);
     const db = pg.databaseFor('records');
 
@@ -1346,7 +1346,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(await failsWith(db.withPrincipal(A, (tx) => tx.query(`SELECT 1 FROM identity.account`))), PERMISSION_DENIED);
   });
 
-  test('records: erasing a record removes the caller\'s data and nobody else\'s', async () => {
+  void test('records: erasing a record removes the caller\'s data and nobody else\'s', async () => {
     await seed(pg);
     const store = createRecordsStore();
 
@@ -1363,7 +1363,7 @@ function registerSuite(pg: TestPostgres): void {
   // chronic-service
   // -------------------------------------------------------------------------
 
-  test('chronic: an account reads and writes its own conditions, readings and medications', async () => {
+  void test('chronic: an account reads and writes its own conditions, readings and medications', async () => {
     await seed(pg);
     await pg.databaseFor('chronic').withPrincipal(A, async (tx) => {
       assert.equal((await listVitals(tx, A, COND_A, 50)).length, 1);
@@ -1383,7 +1383,7 @@ function registerSuite(pg: TestPostgres): void {
     });
   });
 
-  test('chronic: another account\'s condition, readings and medication are unreachable', async () => {
+  void test('chronic: another account\'s condition, readings and medication are unreachable', async () => {
     await seed(pg);
     const db = pg.databaseFor('chronic');
 
@@ -1419,7 +1419,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('chronic: it holds no grant on any other service\'s tables', async () => {
+  void test('chronic: it holds no grant on any other service\'s tables', async () => {
     const db = pg.databaseFor('chronic');
     for (const table of ['programme.enrolment', 'record.observation', 'identity.account', 'ops.device_token', 'ops.audit_event']) {
       assert.equal(await failsWith(db.withPrincipal(A, (tx) => tx.query(`SELECT 1 FROM ${table}`))), PERMISSION_DENIED, table);
@@ -1430,7 +1430,7 @@ function registerSuite(pg: TestPostgres): void {
   // notification-service
   // -------------------------------------------------------------------------
 
-  test('notification: a device token belongs to its account, and moves with the device', async () => {
+  void test('notification: a device token belongs to its account, and moves with the device', async () => {
     await seed(pg);
     const db = pg.databaseFor('notification');
 
@@ -1446,7 +1446,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual((await db.withPrincipal(B, (tx) => tokensFor(tx, B))).sort(), ['token-a', 'token-b']);
   });
 
-  test('notification: the release function removes only the row holding the presented token, and only from another account', async () => {
+  void test('notification: the release function removes only the row holding the presented token, and only from another account', async () => {
     await seed(pg);
     const db = pg.databaseFor('notification');
 
@@ -1461,7 +1461,7 @@ function registerSuite(pg: TestPostgres): void {
   // website-service
   // -------------------------------------------------------------------------
 
-  test('website: the waitlist works, and is invisible to every other service', async () => {
+  void test('website: the waitlist works, and is invisible to every other service', async () => {
     await seed(pg);
     const db = pg.databaseFor('website');
 
@@ -1485,7 +1485,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('website: the waitlist is denied by policy as well as by grant, to a role that is granted everything', async () => {
+  void test('website: the waitlist is denied by policy as well as by grant, to a role that is granted everything', async () => {
     await seed(pg);
     await pg.admin(PROBE_SQL);
     await pg.admin(`GRANT USAGE ON SCHEMA identity, ops TO rls_probe`);
@@ -1503,7 +1503,7 @@ function registerSuite(pg: TestPostgres): void {
   // auth-service
   // -------------------------------------------------------------------------
 
-  test('auth: sign-in, sessions and account deletion work, and deletion cascades to nothing but the account\'s own data', async () => {
+  void test('auth: sign-in, sessions and account deletion work, and deletion cascades to nothing but the account\'s own data', async () => {
     await seed(pg);
     const db = pg.databaseFor('auth');
 
@@ -1529,7 +1529,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(await count(pg, `SELECT 1 FROM ops.audit_event WHERE action = 'account.delete' AND account_id = '${A}'`), 1, 'the deletion left no proof');
   });
 
-  test('auth: it cannot read any patient record, and the refresh-session table is its own alone', async () => {
+  void test('auth: it cannot read any patient record, and the refresh-session table is its own alone', async () => {
     await seed(pg);
     const db = pg.databaseFor('auth');
     for (const table of ['programme.enrolment', 'record.observation', 'chronic.profile', 'ops.device_token', 'ops.waitlist_enquiry']) {
@@ -1548,7 +1548,7 @@ function registerSuite(pg: TestPostgres): void {
   // catalogue-service
   // -------------------------------------------------------------------------
 
-  test('catalogue: it reads the bundle and cannot write it, nor read anything personal', async () => {
+  void test('catalogue: it reads the bundle and cannot write it, nor read anything personal', async () => {
     await seed(pg);
     const db = pg.databaseFor('catalogue');
 
@@ -1565,7 +1565,7 @@ function registerSuite(pg: TestPostgres): void {
   // Every statement a service issues is inside its grants
   // -------------------------------------------------------------------------
 
-  test('enrolment: joining, pausing, hiding and the two-active ceiling all work under the service role', async () => {
+  void test('enrolment: joining, pausing, hiding and the two-active ceiling all work under the service role', async () => {
     // The ceiling is a deferred constraint trigger that reads `catalogue.shell_rule`
     // and `programme.enrolment` as the *invoking* role, so it is only right if the
     // grants and policies let that role read both.
@@ -1598,7 +1598,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal((await db.withPrincipal(STRANGER, (tx) => loadEnrolments(tx, STRANGER))).length, 3);
   });
 
-  test('records: appending, replacing, syncing and reading the export all work under the service role', async () => {
+  void test('records: appending, replacing, syncing and reading the export all work under the service role', async () => {
     await seed(pg);
     const db = pg.databaseFor('records');
     const store = createRecordsStore();
@@ -1649,7 +1649,7 @@ function registerSuite(pg: TestPostgres): void {
     });
   });
 
-  test('care-team: the routing policy is readable, and an escalation raised under a notes consent is listed', async () => {
+  void test('care-team: the routing policy is readable, and an escalation raised under a notes consent is listed', async () => {
     await seed(pg);
     const store = createCareStore();
 
@@ -1678,7 +1678,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal((await asPatient(B)).length, 0);
   });
 
-  test('chronic: a first write creates the profile, and the profile patch reaches only that account\'s row', async () => {
+  void test('chronic: a first write creates the profile, and the profile patch reaches only that account\'s row', async () => {
     await seed(pg);
     const db = pg.databaseFor('chronic');
 
@@ -1692,7 +1692,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.equal(await count(pg, `SELECT 1 FROM chronic.profile`), 3);
   });
 
-  test('notification: preferences and the delivery log work under the service role, and the log holds no body', async () => {
+  void test('notification: preferences and the delivery log work under the service role, and the log holds no body', async () => {
     await seed(pg);
     const db = pg.databaseFor('notification');
 
@@ -1724,7 +1724,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('catalogue: every statement the service issues for the bundle is inside its grants', async () => {
+  void test('catalogue: every statement the service issues for the bundle is inside its grants', async () => {
     await seed(pg);
     const db = pg.databaseFor('catalogue');
 
@@ -1737,7 +1737,7 @@ function registerSuite(pg: TestPostgres): void {
   // Services cannot touch each other's tables
   // -------------------------------------------------------------------------
 
-  test('no service can read a table that belongs to another service', async () => {
+  void test('no service can read a table that belongs to another service', async () => {
     await seed(pg);
     const probes: [Service, string][] = [
       ['enrolment', 'chronic.profile'],
@@ -1766,7 +1766,7 @@ function registerSuite(pg: TestPostgres): void {
   // realtime-service
   // -------------------------------------------------------------------------
 
-  test('R-063: a consent\'s recipient must be a lowercase uuid or NULL, whoever writes it', async () => {
+  void test('R-063: a consent\'s recipient must be a lowercase uuid or NULL, whoever writes it', async () => {
     await seed(pg);
     const rejected = ['someone@example.invalid', 'Jane Example', 'coach-4417', CLIN.toUpperCase(), ''];
     for (const recipient of rejected) {
@@ -1800,7 +1800,7 @@ function registerSuite(pg: TestPostgres): void {
     );
   });
 
-  test('realtime: the allow-list is the account\'s own enrolments plus those a live consent names it recipient of', async () => {
+  void test('realtime: the allow-list is the account\'s own enrolments plus those a live consent names it recipient of', async () => {
     await seed(pg);
     const db = pg.databaseFor('realtime');
     const list = async (who: string) => {
@@ -1815,7 +1815,7 @@ function registerSuite(pg: TestPostgres): void {
     assert.deepEqual(await list(STRANGER), { owned: [], shared: [] });
   });
 
-  test('realtime: events from the database reach the owner and the recipient of an enrolment, and nobody else', async () => {
+  void test('realtime: events from the database reach the owner and the recipient of an enrolment, and nobody else', async () => {
     await seed(pg);
     const db = pg.databaseFor('realtime');
     const received: ChangeNotification[] = [];
@@ -1907,7 +1907,7 @@ function registerSuite(pg: TestPostgres): void {
     }
   });
 
-  test('realtime: it holds no grant on the contents of any row it hears about', async () => {
+  void test('realtime: it holds no grant on the contents of any row it hears about', async () => {
     const db = pg.databaseFor('realtime');
     assert.equal(await failsWith(db.withPrincipal(A, (tx) => tx.query(`SELECT value_num FROM record.observation`))), PERMISSION_DENIED);
     assert.equal(await failsWith(db.withPrincipal(A, (tx) => tx.query(`SELECT consent_text FROM programme.sharing_consent`))), PERMISSION_DENIED);
@@ -1917,7 +1917,7 @@ function registerSuite(pg: TestPostgres): void {
   // The principal
   // -------------------------------------------------------------------------
 
-  test('a transaction with no principal sees no patient row, whatever the role', async () => {
+  void test('a transaction with no principal sees no patient row, whatever the role', async () => {
     await seed(pg);
     for (const [service, table] of [
       ['enrolment', 'programme.enrolment'],
@@ -1932,7 +1932,7 @@ function registerSuite(pg: TestPostgres): void {
 
   // Last on purpose: the role census at the top runs before the tests that make
   // a temporary owner, so it cannot see one left behind.
-  test('S4: no test leaves its helper role behind, and the function owners are back as they were', async () => {
+  void test('S4: no test leaves its helper role behind, and the function owners are back as they were', async () => {
     const leftover = await pg.admin<{ rolname: string }>(`SELECT rolname FROM pg_roles WHERE rolname = 'rls_owner'`);
     assert.deepEqual(leftover, [], 'rls_owner was not dropped');
     const owners = await pg.admin<{ owner: string }>(

@@ -71,7 +71,7 @@ async function refusal(run: () => Promise<void>): Promise<Error> {
   throw new Error('expected startup to be refused');
 }
 
-test('a SUPERUSER role refuses startup, naming SUPERUSER and logging fatal', async () => {
+void test('a SUPERUSER role refuses startup, naming SUPERUSER and logging fatal', async () => {
   const { run, logs } = harness(() => Promise.resolve(role({ rolsuper: true })));
   const error = await refusal(run);
   assert.match(error.message, /SUPERUSER/);
@@ -80,19 +80,19 @@ test('a SUPERUSER role refuses startup, naming SUPERUSER and logging fatal', asy
   assert.match(logs(), /SUPERUSER/);
 });
 
-test('a BYPASSRLS role refuses startup, naming BYPASSRLS', async () => {
+void test('a BYPASSRLS role refuses startup, naming BYPASSRLS', async () => {
   const { run } = harness(() => Promise.resolve(role({ rolbypassrls: true })));
   const error = await refusal(run);
   assert.match(error.message, /BYPASSRLS/);
 });
 
-test('an ordinary service role starts', async () => {
+void test('an ordinary service role starts', async () => {
   const { run, sleeps } = harness(() => Promise.resolve(role()));
   await run();
   assert.deepEqual(sleeps, []);
 });
 
-test('neither the DSN, its host nor its password reaches any log line or error', async () => {
+void test('neither the DSN, its host nor its password reaches any log line or error', async () => {
   // The driver's own error carries the connection string.
   const leaky = () => Promise.reject(new Error(`connect failed for ${FAKE_DSN}`));
   const unreadable = harness(leaky);
@@ -115,7 +115,7 @@ test('neither the DSN, its host nor its password reaches any log line or error',
   }
 });
 
-test('a role that cannot be read is retried, and startup proceeds once it can be', async () => {
+void test('a role that cannot be read is retried, and startup proceeds once it can be', async () => {
   let calls = 0;
   const { run, sleeps } = harness(() => {
     calls += 1;
@@ -126,7 +126,7 @@ test('a role that cannot be read is retried, and startup proceeds once it can be
   assert.deepEqual(sleeps, [10, 20]);
 });
 
-test('a role that never can be read refuses startup (fail closed), without claiming it was privileged', async () => {
+void test('a role that never can be read refuses startup (fail closed), without claiming it was privileged', async () => {
   let calls = 0;
   const { run, logs } = harness(() => {
     calls += 1;
@@ -139,7 +139,7 @@ test('a role that never can be read refuses startup (fail closed), without claim
   assert.match(logs(), /"level":"fatal"/);
 });
 
-test('a privileged role is refused at once, not retried', async () => {
+void test('a privileged role is refused at once, not retried', async () => {
   let calls = 0;
   const { run } = harness(() => {
     calls += 1;
@@ -149,7 +149,7 @@ test('a privileged role is refused at once, not retried', async () => {
   assert.equal(calls, 1);
 });
 
-test('the local-development override lets a privileged role start, loudly', async () => {
+void test('the local-development override lets a privileged role start, loudly', async () => {
   const { run, logs } = harness(() => Promise.resolve(role({ rolsuper: true })), {
     override: PRIVILEGED_ROLE_OVERRIDE_VALUE,
     environment: 'development',
@@ -159,7 +159,7 @@ test('the local-development override lets a privileged role start, loudly', asyn
   assert.match(logs(), /TETHER_ALLOW_PRIVILEGED_DB_ROLE/);
 });
 
-test('the override is refused under NODE_ENV=production: startup is still refused', async () => {
+void test('the override is refused under NODE_ENV=production: startup is still refused', async () => {
   const { run } = harness(() => Promise.resolve(role({ rolbypassrls: true })), {
     override: PRIVILEGED_ROLE_OVERRIDE_VALUE,
     environment: 'production',
@@ -168,7 +168,7 @@ test('the override is refused under NODE_ENV=production: startup is still refuse
   assert.match(error.message, /BYPASSRLS/);
 });
 
-test('a wrong override value does not override', async () => {
+void test('a wrong override value does not override', async () => {
   const { run } = harness(() => Promise.resolve(role({ rolsuper: true })), { override: 'true' });
   await refusal(run);
 });
@@ -180,7 +180,7 @@ test('a wrong override value does not override', async () => {
 const servicesDir = new URL('../../../services/', import.meta.url);
 const NO_DATABASE = ['api-gateway'];
 
-test('every service entrypoint that creates a database runs the role guard before it listens', () => {
+void test('every service entrypoint that creates a database runs the role guard before it listens', () => {
   const covered: string[] = [];
   for (const name of readdirSync(servicesDir)) {
     const source = readFileSync(new URL(`${name}/src/index.ts`, servicesDir), 'utf8');
@@ -200,7 +200,7 @@ test('every service entrypoint that creates a database runs the role guard befor
   assert.equal(covered.length, 9, `covered: ${covered.join(', ')}`);
 });
 
-test('the realtime entrypoint issues LISTEN only through startRealtime', () => {
+void test('the realtime entrypoint issues LISTEN only through startRealtime', () => {
   const source = readFileSync(new URL('realtime-service/src/index.ts', servicesDir), 'utf8');
   assert.ok(!/LISTEN tether_change/.test(source), 'LISTEN must live behind the guard');
   assert.ok(!/listener\.connect\(/.test(source), 'the listener must not connect before the guard');

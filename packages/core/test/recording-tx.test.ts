@@ -9,7 +9,7 @@ import { assertScopedTo, recordingTransaction } from './support/recording-tx.ts'
 
 const ACCOUNT = '11111111-1111-4111-8111-111111111111';
 
-test('a statement that compares the account is accepted, whichever placeholder carries it', () => {
+void test('a statement that compares the account is accepted, whichever placeholder carries it', () => {
   assertScopedTo(
     { sql: 'SELECT 1 FROM t WHERE a = $1 AND account_id = $2', params: ['x', ACCOUNT] },
     'account_id',
@@ -22,7 +22,7 @@ test('a statement that compares the account is accepted, whichever placeholder c
   );
 });
 
-test('an account that is passed but never compared is rejected', () => {
+void test('an account that is passed but never compared is rejected', () => {
   assert.throws(
     () =>
       assertScopedTo(
@@ -34,7 +34,7 @@ test('an account that is passed but never compared is rejected', () => {
   );
 });
 
-test('a statement that does not receive the account at all is rejected', () => {
+void test('a statement that does not receive the account at all is rejected', () => {
   assert.throws(
     () =>
       assertScopedTo(
@@ -46,7 +46,7 @@ test('a statement that does not receive the account at all is rejected', () => {
   );
 });
 
-test('$1 is not mistaken for $10', () => {
+void test('$1 is not mistaken for $10', () => {
   assert.throws(() =>
     assertScopedTo(
       { sql: 'SELECT 1 WHERE account_id = $10', params: [ACCOUNT, ...Array<string>(9).fill('x'), 'y'] },
@@ -56,7 +56,7 @@ test('$1 is not mistaken for $10', () => {
   );
 });
 
-test('the recording transaction returns what it is told and remembers what it was asked', async () => {
+void test('the recording transaction returns what it is told and remembers what it was asked', async () => {
   const tx = recordingTransaction([{ id: 1 }]);
   assert.deepEqual(await tx.query('SELECT 1', ['a']), [{ id: 1 }]);
   assert.deepEqual(await tx.one('SELECT 2'), { id: 1 });

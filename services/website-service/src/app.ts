@@ -61,18 +61,10 @@ export function createWebsiteApp(deps: WebsiteDeps): Express {
   const app = createApp({ config, logger, verifier });
 
   /**
-   * `requireAuth` from `@tether/core`, as a handler that returns `void`.
-   *
-   * `requireAuth` is an `async` function, and Express's handler type expects
-   * `void` (`@typescript-eslint/no-misused-promises`). It already routes its own
-   * failures to `next`, so it does not reject in practice; the `.catch(next)` is
-   * the explicit statement of what happens if it ever does (the error handler
-   * answers, and a rejection is never left unhandled). Behaviour is unchanged.
+   * `requireAuth` from `@tether/core`. It already returns `void` and routes its
+   * own failures to `next`, so it is a valid Express handler as it stands.
    */
-  const verifyToken = requireAuth(verifier);
-  const requireToken: RequestHandler = (req, res, next) => {
-    verifyToken(req, res, next).catch(next);
-  };
+  const requireToken: RequestHandler = requireAuth(verifier);
 
   /**
    * A second, much stricter limiter on top of the service-wide one.

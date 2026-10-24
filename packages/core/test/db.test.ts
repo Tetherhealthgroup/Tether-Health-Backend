@@ -7,14 +7,14 @@ import { assertAccountId } from '../src/db.ts';
  * `::uuid` cast. These are the inputs that must never reach `set_config`.
  */
 
-test('a uuid is accepted and normalised to lower case', () => {
+void test('a uuid is accepted and normalised to lower case', () => {
   assert.equal(
     assertAccountId('11111111-AAAA-4111-8111-111111111111'),
     '11111111-aaaa-4111-8111-111111111111',
   );
 });
 
-test('anything that is not a uuid is refused, without echoing it', () => {
+void test('anything that is not a uuid is refused, without echoing it', () => {
   for (const bad of [
     '',
     ' ',
@@ -78,18 +78,18 @@ function guardWith(
   return { guard, logs: () => chunks.join('') };
 }
 
-test('an ordinary role is acceptable', () => {
+void test('an ordinary role is acceptable', () => {
   assert.equal(privilegedRoleProblem(role()), null);
 });
 
-test('a superuser, a BYPASSRLS role, or one that cannot be read, is a problem', () => {
+void test('a superuser, a BYPASSRLS role, or one that cannot be read, is a problem', () => {
   assert.match(privilegedRoleProblem(role({ rolsuper: true })) ?? '', /SUPERUSER/);
   assert.match(privilegedRoleProblem(role({ rolbypassrls: true })) ?? '', /BYPASSRLS/);
   assert.match(privilegedRoleProblem(role({ rolsuper: true, rolbypassrls: true })) ?? '', /SUPERUSER and BYPASSRLS/);
   assert.match(privilegedRoleProblem(undefined) ?? '', /could not be read/);
 });
 
-test('a privileged role is not ready, and the refusal is logged at fatal', async () => {
+void test('a privileged role is not ready, and the refusal is logged at fatal', async () => {
   const { guard, logs } = guardWith(() => Promise.resolve(role({ rolsuper: true })));
 
   assert.equal(await guard.check(), false);
@@ -97,7 +97,7 @@ test('a privileged role is not ready, and the refusal is logged at fatal', async
   assert.match(logs(), /exempts it from row-level security/);
 });
 
-test('an unprivileged role is ready, and is not asked again', async () => {
+void test('an unprivileged role is ready, and is not asked again', async () => {
   let reads = 0;
   const { guard } = guardWith(() => {
     reads += 1;
@@ -109,7 +109,7 @@ test('an unprivileged role is ready, and is not asked again', async () => {
   assert.equal(reads, 1);
 });
 
-test('a failure to read the role is not ready, and is retried', async () => {
+void test('a failure to read the role is not ready, and is retried', async () => {
   let calls = 0;
   const { guard } = guardWith(() => {
     calls += 1;
@@ -120,7 +120,7 @@ test('a failure to read the role is not ready, and is retried', async () => {
   assert.equal(await guard.check(), true);
 });
 
-test('the local-development override lets a privileged role through, loudly, and only with the exact value', async () => {
+void test('the local-development override lets a privileged role through, loudly, and only with the exact value', async () => {
   const privileged = () => Promise.resolve(role({ rolbypassrls: true }));
 
   const allowed = guardWith(privileged, { override: PRIVILEGED_ROLE_OVERRIDE_VALUE });
@@ -135,7 +135,7 @@ test('the local-development override lets a privileged role through, loudly, and
   }
 });
 
-test('the override is ignored in production', async () => {
+void test('the override is ignored in production', async () => {
   const { guard } = guardWith(() => Promise.resolve(role({ rolsuper: true })), {
     override: PRIVILEGED_ROLE_OVERRIDE_VALUE,
     environment: 'production',

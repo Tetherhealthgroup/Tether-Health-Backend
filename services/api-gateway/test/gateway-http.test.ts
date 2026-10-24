@@ -139,7 +139,7 @@ function assertNothingReceived(harness: Harness): void {
   assert.deepEqual(harness.received, {}, "an upstream received a request");
 }
 
-void test("DELETE /api/v1/waitlist/waitlist/<id> with no token is a 404 and reaches no upstream", async () => {
+void test("DELETE /api/v1/waitlist/waitlist/<id> with no token is a 401 (only POST /waitlist is public, R-033) and reaches no upstream", async () => {
   const harness = await startHarness();
   try {
     const response = await request(
@@ -149,14 +149,14 @@ void test("DELETE /api/v1/waitlist/waitlist/<id> with no token is a 404 and reac
       false,
     );
     await response.text();
-    assert.equal(response.status, 404);
+    assert.equal(response.status, 401);
     assertNothingReceived(harness);
   } finally {
     await harness.stop();
   }
 });
 
-void test("POST /api/v1/waitlist/waitlist with no token is a 404 and reaches no upstream", async () => {
+void test("POST /api/v1/waitlist/waitlist with no token is a 401 (only the exact form path is public, R-033) and reaches no upstream", async () => {
   const harness = await startHarness();
   try {
     const response = await request(
@@ -166,7 +166,7 @@ void test("POST /api/v1/waitlist/waitlist with no token is a 404 and reaches no 
       false,
     );
     await response.text();
-    assert.equal(response.status, 404);
+    assert.equal(response.status, 401);
     assertNothingReceived(harness);
   } finally {
     await harness.stop();

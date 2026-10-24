@@ -45,7 +45,7 @@ const privileged = (attribute: string): RoleVerdict => ({
   problem: `database role "tether_realtime_login" holds ${attribute}, which exempts it from row-level security`,
 });
 
-test('a privileged role: no connect, no LISTEN, no HTTP listener, and the rejection names the attribute', async () => {
+void test('a privileged role: no connect, no LISTEN, no HTTP listener, and the rejection names the attribute', async () => {
   const { deps, events, logs } = setup(() => Promise.resolve(privileged('SUPERUSER')));
   await assert.rejects(
     () => startRealtime(deps),
@@ -59,21 +59,21 @@ test('a privileged role: no connect, no LISTEN, no HTTP listener, and the reject
   assert.ok(!logs().includes(FAKE_DSN));
 });
 
-test('a BYPASSRLS role: no LISTEN issued either', async () => {
+void test('a BYPASSRLS role: no LISTEN issued either', async () => {
   const { deps, events } = setup(() => Promise.resolve(privileged('BYPASSRLS')));
   await assert.rejects(() => startRealtime(deps), /BYPASSRLS/);
   assert.ok(!events.includes('LISTEN tether_change'));
   assert.ok(!events.includes('serve'));
 });
 
-test('an unreadable role also stops LISTEN and the listener (fail closed)', async () => {
+void test('an unreadable role also stops LISTEN and the listener (fail closed)', async () => {
   const { deps, events, logs } = setup(() => Promise.resolve({ status: 'unreadable' }));
   await assert.rejects(() => startRealtime(deps), StartupRefusedError);
   assert.deepEqual(events, []);
   assert.ok(!logs().includes('Sup3rS3cretPw'));
 });
 
-test('an ordinary role: connect, then LISTEN, then the HTTP listener, in that order', async () => {
+void test('an ordinary role: connect, then LISTEN, then the HTTP listener, in that order', async () => {
   const { deps, events } = setup(() => Promise.resolve({ status: 'ok' }));
   await startRealtime(deps);
   assert.deepEqual(events, ['connect', 'LISTEN tether_change', 'serve']);

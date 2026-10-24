@@ -44,7 +44,7 @@ function context() {
   return { tx, ctx };
 }
 
-test('every read of a shared record names the clinician', async () => {
+void test('every read of a shared record names the clinician', async () => {
   const { tx, ctx } = context();
 
   await store.enrolment(ctx, ENROLMENT);
@@ -60,7 +60,7 @@ test('every read of a shared record names the clinician', async () => {
   }
 });
 
-test('free text is read only under a notes consent', async () => {
+void test('free text is read only under a notes consent', async () => {
   const { tx, ctx } = context();
 
   await store.notes(ctx, ENROLMENT);
@@ -74,7 +74,7 @@ test('free text is read only under a notes consent', async () => {
   }
 });
 
-test('a lapse\'s severity and context come only through the notes-scoped function', async () => {
+void test('a lapse\'s severity and context come only through the notes-scoped function', async () => {
   const { tx, ctx } = context();
 
   await store.lapseEvents(ctx, ENROLMENT);
@@ -87,7 +87,7 @@ test('a lapse\'s severity and context come only through the notes-scoped functio
   assert.doesNotMatch(statement.sql, /FROM record\.lapse_event/);
 });
 
-test('an escalation is inserted from the clinician\'s own live consent', async () => {
+void test('an escalation is inserted from the clinician\'s own live consent', async () => {
   const { tx, ctx } = context();
 
   await assert.rejects(
@@ -123,7 +123,7 @@ test('an escalation is inserted from the clinician\'s own live consent', async (
   assert.equal(insert.params[1], CLINICIAN);
 });
 
-test('the shared list and the live-consent lookup were already scoped, and stay so', async () => {
+void test('the shared list and the live-consent lookup were already scoped, and stay so', async () => {
   const { tx, ctx } = context();
 
   await store.sharedProgrammes(ctx);

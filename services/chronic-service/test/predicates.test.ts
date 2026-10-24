@@ -25,7 +25,7 @@ import { ACCOUNT, CONDITION, answer } from './support/harness.ts';
 
 const MEDICATION = '55555555-5555-4555-8555-555555555555';
 
-test('every read of a condition or a reading names the account', async () => {
+void test('every read of a condition or a reading names the account', async () => {
   const tx = recordingTransaction((s) => answer(s.sql));
 
   await getProfile(tx, ACCOUNT);
@@ -40,7 +40,7 @@ test('every read of a condition or a reading names the account', async () => {
   }
 });
 
-test('a reading is filed only under a condition that belongs to the account', async () => {
+void test('a reading is filed only under a condition that belongs to the account', async () => {
   const tx = recordingTransaction((s) => answer(s.sql));
 
   await createVital(tx, ACCOUNT, CONDITION, {
@@ -60,7 +60,7 @@ test('a reading is filed only under a condition that belongs to the account', as
   assert.match(insert.sql, /SELECT c\.id[\s\S]+FROM chronic\.condition c/);
 });
 
-test('a medication is deleted only from the account\'s own profile', async () => {
+void test('a medication is deleted only from the account\'s own profile', async () => {
   const tx = recordingTransaction((s) => answer(s.sql));
 
   assert.equal(await deleteMedication(tx, ACCOUNT, MEDICATION), true);
@@ -71,12 +71,12 @@ test('a medication is deleted only from the account\'s own profile', async () =>
   assert.deepEqual(statement.params, [MEDICATION, ACCOUNT]);
 });
 
-test('deleting a medication that is not the account\'s reports nothing removed', async () => {
+void test('deleting a medication that is not the account\'s reports nothing removed', async () => {
   const tx = recordingTransaction([]);
   assert.equal(await deleteMedication(tx, ACCOUNT, MEDICATION), false);
 });
 
-test('a medication cannot be tied to somebody else\'s condition', async () => {
+void test('a medication cannot be tied to somebody else\'s condition', async () => {
   // Foreign keys are checked without row-level security, so the statement
   // itself has to refuse a condition id that is not the caller's. With no row
   // produced, the caller gets the same 404 an unknown condition would.
