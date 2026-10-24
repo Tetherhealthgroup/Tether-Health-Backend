@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFERRED_ROUTES,
   ROUTES,
   isPublic,
   matchesPrefix,
@@ -56,20 +57,19 @@ void test('the query string is preserved across stripping', () => {
     '/answers?enrolment=abc&limit=50',
   );
   // Prefix with nothing but a query after it still needs a path on the wire.
-  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist?source=astro'), '/?source=astro');
+  assert.equal(stripServicePrefix('/api/v1/notifications', '/api/v1/notifications?unread=1'), '/?unread=1');
 });
 
 void test('a bare prefix becomes the downstream root, not the empty string', () => {
-  // `POST /api/v1/waitlist` is the website form's only endpoint; it must arrive
-  // at website-service as `POST /`, and `POST ` is not a request line.
-  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist'), '/');
-  assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist/'), '/');
+  // A service mounted at its root must receive `GET /`; `GET ` is not a request line.
+  assert.equal(stripServicePrefix('/api/v1/notifications', '/api/v1/notifications'), '/');
+  assert.equal(stripServicePrefix('/api/v1/notifications', '/api/v1/notifications/'), '/');
 });
 
 void test('enrolment-service receives its resource name (BE-049)', () => {
   // enrolment-service serves `/enrolments...`, so the public prefix is rewritten
-  // to that name rather than removed. Waitlist and stream are deliberately
-  // unchanged (they arrive at `/`) until BE-001 lands; see composition.test.ts.
+  // to that name rather than removed. Waitlist and stream are not routed at all
+  // until BE-001 lands (BE-053); see composition.test.ts.
   assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments'), '/enrolments');
   assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments/'), '/enrolments/');
   assert.equal(
@@ -92,7 +92,6 @@ void test('every documented prefix resolves to its own service', () => {
     ['/api/v1/records/answers', 'records-service'],
     ['/api/v1/care/patients', 'care-team-service'],
     ['/api/v1/notifications/devices', 'notification-service'],
-    ['/api/v1/waitlist', 'website-service'],
     ['/api/v1/chronic/vitals', 'chronic-service'],
   ];
 
@@ -198,4 +197,59 @@ void test('unreachable and unresponsive upstreams are told apart', () => {
   // fine, which is what a 500 here would wrongly claim.
   assert.equal(statusForProxyError(undefined), 502);
   assert.equal(statusForProxyError('SOMETHING_NEW'), 502);
+});
+
+void test('the doubled service prefix is not collapsed, for every routed service', () => {
+  // `/api/v1/<x>/<x>` must reach the service as `/<x>` (or `/enrolments/enrolments`),
+  // never be normalised into the single form.
+  for (const route of ROUTES) {
+    const segment = route.prefix.split('/').pop() ?? '';
+    const forwarded = stripServicePrefix(route.prefix, `${route.prefix}/${segment}`);
+    assert.equal(forwarded, `${route.servicePath ?? ''}/${segment}`, route.prefix);
+  }
+});
+
+void test('waitlist and stream are not routed in any spelling (R-033, BE-053)', () => {
+  const sample = '00000000-0000-4000-8000-000000000000';
+  for (const prefix of ['/api/v1/waitlist', '/api/v1/stream']) {
+    const word = prefix.split('/').pop() ?? '';
+    const spellings = [
+      prefix,
+      `${prefix}/`,
+      `${prefix}?x=1`,
+      `${prefix}/${word}`,
+      `${prefix}/${word}/`,
+      `${prefix}/${word.toUpperCase()}/${sample}`,
+      `${prefix}/${word[0]?.toUpperCase()}${word.slice(1)}/`,
+      `${prefix}//${word}`,
+      `${prefix}/${word}//`,
+      `${prefix}/${sample}`,
+      `${prefix.toUpperCase()}/${sample}`,
+      `/api/v1/%${word.charCodeAt(0).toString(16)}${word.slice(1)}/${sample}`,
+    ];
+    for (const path of spellings) {
+      assert.equal(routeFor(path), null, path);
+    }
+  }
+});
+
+void test('routeFor is case-sensitive and does not decode, so a variant prefix matches nothing', () => {
+  assert.equal(routeFor('/API/V1/RECORDS/answers'), null);
+  assert.equal(routeFor('/api/v1/Records/answers'), null);
+  assert.equal(routeFor('/api/v1/%72ecords/answers'), null);
+  assert.equal(routeFor('/api/v1//records/answers'), null);
+});
+
+void test('deferred routes carry their service identity but are not in the routing table', () => {
+  assert.deepEqual(
+    DEFERRED_ROUTES.map((r) => [r.prefix, r.service]),
+    [
+      ['/api/v1/waitlist', 'website-service'],
+      ['/api/v1/stream', 'realtime-service'],
+    ],
+  );
+  for (const deferred of DEFERRED_ROUTES) {
+    assert.equal(ROUTES.includes(deferred), false);
+    assert.equal(routeFor(deferred.prefix), null);
+  }
 });
