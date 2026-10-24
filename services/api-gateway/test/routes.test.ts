@@ -66,6 +66,19 @@ test('a bare prefix becomes the downstream root, not the empty string', () => {
   assert.equal(stripServicePrefix('/api/v1/waitlist', '/api/v1/waitlist/'), '/');
 });
 
+void test('enrolment-service receives its resource name (BE-049)', () => {
+  // enrolment-service serves `/enrolments...`, so the public prefix is rewritten
+  // to that name rather than removed. Waitlist and stream are deliberately
+  // unchanged (they arrive at `/`) until BE-001 lands; see composition.test.ts.
+  assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments'), '/enrolments');
+  assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments/'), '/enrolments/');
+  assert.equal(
+    stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments/tobacco/sharing?x=1'),
+    '/enrolments/tobacco/sharing?x=1',
+  );
+  assert.equal(stripServicePrefix('/api/v1/enrolments', '/api/v1/enrolments?limit=5'), '/enrolments?limit=5');
+});
+
 test('a path outside the prefix is returned untouched', () => {
   assert.equal(stripServicePrefix('/api/v1/care', '/api/v1/careful/x'), '/api/v1/careful/x');
   assert.equal(stripServicePrefix('/api/v1/care', '/healthz'), '/healthz');

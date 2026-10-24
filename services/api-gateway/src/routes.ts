@@ -28,6 +28,20 @@ export interface RouteEntry {
   /** For logs and problem details. Never a hostname — that is internal. */
   readonly service: string;
   readonly urlKey: ServiceUrlKey;
+  /**
+   * Where the service itself mounts its routes, when that is not its root.
+   *
+   * Most services mount at `/` (`POST /sessions`), so the whole public prefix
+   * is stripped. Only enrolment-service (`/enrolments...`) carries the resource
+   * name in its own route paths, so for it the public prefix is rewritten to
+   * that name instead of removed. Absent means the root.
+   *
+   * website-service (`/waitlist`) and realtime-service (`/stream`) have the
+   * same shape but are deliberately not mapped yet: reaching them from the
+   * gateway exposes R-033, which is fixed only in BE-001.
+   * `test/composition.test.ts` lists them as known-unreachable.
+   */
+  readonly servicePath?: string;
 }
 
 /**
@@ -42,7 +56,7 @@ export interface RouteEntry {
 export const ROUTES: readonly RouteEntry[] = [
   { prefix: '/api/v1/auth', service: 'auth-service', urlKey: 'AUTH_SERVICE_URL' },
   { prefix: '/api/v1/catalogue', service: 'catalogue-service', urlKey: 'CATALOGUE_SERVICE_URL' },
-  { prefix: '/api/v1/enrolments', service: 'enrolment-service', urlKey: 'ENROLMENT_SERVICE_URL' },
+  { prefix: '/api/v1/enrolments', service: 'enrolment-service', urlKey: 'ENROLMENT_SERVICE_URL', servicePath: '/enrolments' },
   { prefix: '/api/v1/records', service: 'records-service', urlKey: 'RECORDS_SERVICE_URL' },
   { prefix: '/api/v1/care', service: 'care-team-service', urlKey: 'CARE_TEAM_SERVICE_URL' },
   { prefix: '/api/v1/notifications', service: 'notification-service', urlKey: 'NOTIFICATION_SERVICE_URL' },
@@ -67,22 +81,28 @@ export function matchesPrefix(prefix: string, pathname: string): boolean {
 }
 
 /**
- * Removes the `/api/v1/<service>` prefix, preserving the query string.
+ * Rewrites the public `/api/v1/<service>` prefix to where the service mounts
+ * its routes, preserving the query string.
  *
- * Downstream services are mounted at their own root: the auth service serves
- * `POST /sessions`, not `POST /api/v1/auth/sessions`. It does not know it sits
- * behind a gateway, and it should not — that is what makes it runnable on its
- * own in a test, and what keeps the public URL shape a gateway decision rather
- * than something eight services have to agree on.
+ * Downstream services do not know they sit behind a gateway, and that is what
+ * makes them runnable on their own in a test and keeps the public URL shape a
+ * gateway decision. Most mount at their own root: the auth service serves
+ * `POST /sessions`, not `POST /api/v1/auth/sessions`, so the prefix is removed.
+ * A service with a `servicePath` on its `ROUTES` entry (today only
+ * enrolment-service) gets the prefix replaced by that name, so
+ * `GET /api/v1/enrolments` arrives as `GET /enrolments`.
+ * `test/composition.test.ts` checks the result against each service's routes.
  *
- * `/api/v1/waitlist` with nothing after it becomes `/`, not the empty string:
- * an HTTP request line needs a path.
+ * With nothing after the prefix a service mounted at the root receives `/`, not
+ * the empty string: an HTTP request line needs a path.
  */
 export function stripServicePrefix(prefix: string, url: string): string {
   if (!matchesPrefix(prefix, url)) return url;
+  const mount = ROUTES.find((route) => route.prefix === prefix)?.servicePath ?? '';
   const rest = url.slice(prefix.length);
-  if (rest === '') return '/';
-  return rest.startsWith('?') ? `/${rest}` : rest;
+  if (rest === '') return mount === '' ? '/' : mount;
+  if (rest.startsWith('?')) return `${mount === '' ? '/' : mount}${rest}`;
+  return `${mount}${rest}`;
 }
 
 /** The route serving `pathname`, or null. */
